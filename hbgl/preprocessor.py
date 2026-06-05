@@ -56,148 +56,104 @@ class HBGLPreprocessor:
     ):
         text_ids = bert_text_input_ids
         label_ids = bert_label_input_ids
-        mask_ids = torch.full_like(label_ids, self._mask_token_id)
+
+        mask_token_id = self.get_mask_token_id()
+        mask_ids = torch.full_like(label_ids, mask_token_id)
 
         return torch.cat([text_ids, label_ids, mask_ids], dim=1)
     
-    def _prepare_token_type_ids(
+    def _prepare_label_token_type_ids(
         self,
-        bert_text_token_type_ids: torch.Tensor,
         bert_label_token_type_ids: torch.Tensor,
     ) -> torch.Tensor:
-        text_ids = bert_text_token_type_ids
         label_ids = torch.ones_like(bert_label_token_type_ids)
-        mask_ids = label_ids
-
-        return torch.cat([text_ids, label_ids, mask_ids], dim=1)
+        return label_ids
     
-    def _prepare_attention_mask(
-        self,
-        bert_text_attention_mask: torch.Tensor,
-        bert_label_attention_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        bert_mask_attention_mask = bert_label_attention_mask
-        bert_attention_mask = torch.cat(
-            [
-                bert_text_attention_mask,
-                bert_label_attention_mask,
-                bert_mask_attention_mask,
-            ],
-            dim=1
-        )
-        bert_attention_mask = bert_attention_mask.unsqueeze(1)
-        bert_attention_mask = bert_attention_mask.unsqueeze(3)
-
-        batch_size = bert_attention_mask.shape[0]
-        device = self._device
-        assert device == bert_attention_mask.device
-
-        text_length = bert_text_attention_mask.shape[1]
-        label_length = bert_label_attention_mask.shape[1]
-        mask_length = label_length
-        length = text_length + label_length + mask_length
+    def _prepare_position_ids(self, bert_input_ids: torch.Tensor) -> torch.Tensor:
+        batch_size = bert_input_ids.shape[0]
+        device = self.get_device()
+        assert device == bert_input_ids.device
         
-        label_start_index = text_length
-        label_stop_index = label_start_index + label_length
-        mask_start_index = label_stop_index
-        mask_stop_index = mask_start_index + mask_length
+        length = bert_input_ids.shape[1]
+        ids = torch.arange(length, device=device)
+        ids = ids.repeat(batch_size, 1)
 
-        label_base_subattention = torch.ones((label_length, label_length), device=device)
-        label_to_label_subattention = torch.tril(label_base_subattention)
-        label_to_mask_subattention = torch.tril(label_base_subattention, diagonal=-1)
-
-        mask_to_mask_subattention = torch.eye(label_length, device=device)
-
-        text_attention = torch.ones((batch_size, 1, length, text_length), device=device)
-
-        label_attention = torch.zeros((batch_size, 1, length, label_length), device=device)
-        label_attention[:, :, label_start_index:label_stop_index, :] = label_to_label_subattention
-        label_attention[:, :, mask_start_index:mask_stop_index, :] = label_to_mask_subattention
-
-        mask_attention = torch.zeros((batch_size, 1, length, mask_length), device=device)
-        mask_attention[:, :, mask_start_index:mask_stop_index, :] = mask_to_mask_subattention
-
-        result = torch.cat([text_attention, label_attention, mask_attention], dim=3)
-        result = result * bert_attention_mask
-        return result
+        return ids
     
-    def _prepare_position_ids(
-        self,
-        bert_text_input_ids: torch.Tensor,
-        bert_label_input_ids: torch.Tensor,
-    ) -> torch.Tensor:
-        batch_size = bert_text_input_ids.shape[0]
-        assert batch_size == bert_label_input_ids.shape[0]
-        
-        device = self._device
-        assert device == bert_text_input_ids.device
+    def _prepare_label_position_ids(self, bert_label_input_ids: torch.Tensor) -> torch.Tensor:
+        batch_size = bert_label_input_ids.shape[0]
+        device = self.get_device()
         assert device == bert_label_input_ids.device
 
-        text_length = bert_text_input_ids.shape[1]
-        text_ids = torch.arange(text_length, device=device)
-        text_ids = text_ids.repeat(batch_size, 1)
+        length = bert_label_input_ids.shape[1]
+        ids = torch.arange(length, device=device) + 1
+        ids = ids.repeat(batch_size, 1)
 
-        label_length = bert_label_input_ids.shape[1]
-        label_ids = torch.arange(label_length, device=device) + 1
-        label_ids = label_ids.repeat(batch_size, 1)
-
-        mask_ids = label_ids
-
-        return torch.cat([text_ids, label_ids, mask_ids], dim=1)
+        return ids
     
     def _prepare_labels(self, label_paths: list[list[str]]):
+        device = self.get_device()
         return torch.tensor([
             [int(t in path) for t in self._labels]
             for path in label_paths
-        ], device=self._device).float()
+        ], device=device).float()
     
     def _pass_to_bert_tokenizer(self, texts: list[str]) -> BatchEncoding[torch.Tensor]:
         inputs = self._bert_tokenizer(texts, return_tensors="pt", padding=True)
+
+        device = self.get_device()
         for k in inputs.keys():
-            inputs[k] = inputs[k].to(self._device)
+            inputs[k] = inputs[k].to(device)
 
         return inputs
     
     def __call__(
         self,
         texts: list[str],
-        label_paths: list[list[str]],
-    ):
-        # TODO: How do you handle if there is no label_paths?
-        self._assert_valid_label_paths(label_paths)
-
+        label_paths: list[list[str]] | None = None,
+    ) -> BatchEncoding[torch.Tensor]:
         bert_text_inputs = self._pass_to_bert_tokenizer(texts)
-        bert_label_inputs = self._pass_to_bert_tokenizer([" ".join(p) for p in label_paths])
-        bert_label_inputs = remove_first_token(bert_label_inputs)
-
-        input_ids = self._prepare_input_ids(
-            bert_text_inputs["input_ids"],
-            bert_label_inputs["input_ids"],
-        )
-        token_type_ids = self._prepare_token_type_ids(
-            bert_text_inputs["token_type_ids"],
-            bert_label_inputs["token_type_ids"],
-        )
-        attention_mask = self._prepare_attention_mask(
-            bert_text_inputs["attention_mask"],
-            bert_label_inputs["attention_mask"],
-        )
         position_ids = self._prepare_position_ids(
             bert_text_inputs["input_ids"],
-            bert_label_inputs["input_ids"],
         )
-        labels = self._prepare_labels(label_paths)
-
-        return BatchEncoding({
-            "input_ids": input_ids,
-            "token_type_ids": token_type_ids,
-            "attention_mask": attention_mask,
+        text_data = {
+            "input_ids": bert_text_inputs["input_ids"],
+            "token_type_ids": bert_text_inputs["token_type_ids"],
+            "attention_mask": bert_text_inputs["attention_mask"],
             "position_ids": position_ids,
-            "labels": labels,
-        })
+        }
+        if label_paths is None:
+            label_data = {}
+        else:
+            self._assert_valid_label_paths(label_paths)
+            bert_label_inputs = self._pass_to_bert_tokenizer([" ".join(p) for p in label_paths])
+            bert_label_inputs = remove_first_token(bert_label_inputs)
+
+            label_token_type_ids = self._prepare_label_token_type_ids(
+                bert_label_inputs["token_type_ids"]
+            )
+            label_position_ids = self._prepare_label_position_ids(
+                bert_label_inputs["input_ids"],
+            )
+            labels = self._prepare_labels(label_paths)
+            label_data = {
+                "labels": labels,
+                "label_input_ids": bert_label_inputs["input_ids"],
+                "label_token_type_ids": label_token_type_ids,
+                "label_attention_mask": bert_label_inputs["attention_mask"],
+                "label_position_ids": label_position_ids
+            }
+
+        return BatchEncoding(text_data | label_data)
     
     def get_hierarchy_label_ids(self) -> list[int]:
         return self._hierarchy_label_ids.copy()
     
     def get_hierarchy_label_levels(self) -> list[int]:
         return self._hierarchy_label_levels.copy()
+    
+    def get_mask_token_id(self) -> int:
+        return self._mask_token_id
+    
+    def get_device(self) -> torch.device:
+        return self._device
