@@ -57,7 +57,7 @@ class HBGLPreprocessor:
         return [int(t in label_path) for t in self._labels]
     
     def _pass_to_bert_tokenizer(self, text: str) -> BatchEncoding:
-        inputs = self._bert_tokenizer(text)
+        inputs = self._bert_tokenizer(text, truncation=True)
         return inputs
     
     def __call__(

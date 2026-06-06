@@ -19,41 +19,42 @@ class HBGLDataCollator:
 
     def __call__(self, features: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
         # TODO: What if there is no labels?
-        attrs = list(features[0].keys())
-        inputs: dict[str, list[list[int]]] = {a: [] for a in attrs}
-
         TEXT_TOKENIZATION_ATTRIBUTES = ["input_ids", "token_type_ids", "attention_mask", "position_ids"]
         LABEL_TOKENIZATION_ATTRIBUTES = ["label_input_ids", "label_token_type_ids", "label_attention_mask", "label_position_ids"]
+        LABEL_ATTRIBUTE = "labels"
+        ATTRIBUTES = TEXT_TOKENIZATION_ATTRIBUTES + LABEL_TOKENIZATION_ATTRIBUTES + [LABEL_ATTRIBUTE]
+        inputs: dict[str, list[list[int]]] = {a: [] for a in ATTRIBUTES}
 
         max_text_length = 0
         max_label_length = 0
         for f in features:
             text_length = -1
-            label_length = -1
+            for a in TEXT_TOKENIZATION_ATTRIBUTES:
+                inputs[a].append(f[a])
+                length = len(f[a])
+                if text_length == -1:
+                    text_length = length
+                else:
+                    assert length == text_length
+            max_text_length = max(text_length, max_text_length)
 
-            for a in attrs:
+            label_length = -1
+            for a in LABEL_TOKENIZATION_ATTRIBUTES:
                 inputs[a].append(f[a])
                 
                 length = len(f[a])
-                if a in TEXT_TOKENIZATION_ATTRIBUTES:
-                    if text_length == -1:
-                        text_length = length
-                    else:
-                        assert length == text_length
-
-                if a in LABEL_TOKENIZATION_ATTRIBUTES:
-                    if label_length == -1:
-                        label_length = length
-                    else:
-                        assert length == label_length
-                
-            max_text_length = max(text_length, max_text_length)
+                if label_length == -1:
+                    label_length = length
+                else:
+                    assert length == label_length
             max_label_length = max(label_length, max_label_length)
+
+            a = LABEL_ATTRIBUTE
+            inputs[a].append(f[a])
 
         for a in TEXT_TOKENIZATION_ATTRIBUTES:
             for value in inputs[a]:
                 while len(value) < max_text_length:
-                    # value.append(0)
                     if a == "input_ids":
                         value.append(self._pad_token_id)
                     elif a == "token_type_ids":
@@ -129,7 +130,7 @@ class HBGLDataCollator:
         position_ids = torch.cat([text_position_ids, label_position_ids, mask_position_ids], dim=1)
 
         # labels
-        labels = torch.tensor(inputs["labels"])
+        labels = torch.tensor(inputs["labels"]).float()
 
         return {
             "input_ids": input_ids,
