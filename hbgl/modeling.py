@@ -21,18 +21,20 @@ class HBGLModel(nn.Module):
         super(HBGLModel, self).__init__()
         self.bert = bert
 
-        bert_embeddings: nn.Embedding = self._get_word_embeddings(bert)
-        self.word_embeddings = bert_embeddings
-
+        bert_embeddings = self._get_word_embeddings()
         embedding_dim = bert_embeddings.embedding_dim
         self.label_embeddings = nn.Parameter(
-            torch.randn((config.label_count, embedding_dim))
+            torch.randn(
+                (config.label_count, embedding_dim),
+                device=self.bert.device
+            )
         )
 
         self.config = config
+        self._device = self.bert.device
 
-    def _get_word_embeddings(self, model: PreTrainedModel):
-        embeddings = model.get_input_embeddings()
+    def _get_word_embeddings(self):
+        embeddings = self.bert.get_input_embeddings()
         if not isinstance(embeddings, nn.Embedding):
             raise ValueError(f"bert.embeddings is not nn.Embedding (got: {type(embeddings)})")
         return embeddings
@@ -44,6 +46,11 @@ class HBGLModel(nn.Module):
             label_input_ids: torch.Tensor,
             label_attention_mask: torch.Tensor,
     ):
+        input_ids = input_ids.to(self._device)
+        attention_mask = attention_mask.to(self._device)
+        label_input_ids = label_input_ids.to(self._device)
+        label_attention_mask = label_attention_mask.to(self._device)
+
         mask_input_ids, mask_attention_mask = self._prepare_mask_inputs(label_input_ids, label_attention_mask)
 
         # Harusnya nanti di sini pakai input_embeds karena kita pakai label embeddings yang tidak ada dalam token.
@@ -69,6 +76,10 @@ class HBGLModel(nn.Module):
         scores = torch.sigmoid(scores)
         return scores
     
+    def _forward_word_embeddings(self, x: torch.Tensor) -> torch.Tensor:
+        bert_embeddings: nn.Embedding = self._get_word_embeddings()
+        return bert_embeddings(x)
+    
     def _prepare_mask_inputs(
         self,
         label_input_ids: torch.Tensor,
@@ -84,16 +95,17 @@ class HBGLModel(nn.Module):
         label_input_ids: torch.Tensor,
         mask_input_ids: torch.Tensor,
     ):
-        text_embeds: torch.Tensor = self.word_embeddings(input_ids)
+        text_embeds = self._forward_word_embeddings(input_ids)
 
+        label_input_ids = label_input_ids.clone()
         mask_in_label_input_ids = label_input_ids == self.config.sep_label_id
         label_input_ids[mask_in_label_input_ids] = 0
         label_embeds = self.label_embeddings[label_input_ids]
-        label_embeds[mask_in_label_input_ids] = self.word_embeddings(
+        label_embeds[mask_in_label_input_ids] = self._forward_word_embeddings(
             torch.tensor(self.config.sep_token_id, device=label_embeds.device)
         )
 
-        mask_embeds: torch.Tensor = self.word_embeddings(mask_input_ids)
+        mask_embeds: torch.Tensor = self._forward_word_embeddings(mask_input_ids)
         return torch.cat([
             text_embeds,
             label_embeds,
@@ -147,7 +159,7 @@ class HBGLModel(nn.Module):
         mask_start_index = label_stop_index
         mask_stop_index = mask_start_index + mask_length
 
-        label_base_subattention = torch.ones((label_length, label_length))
+        label_base_subattention = torch.ones((label_length, label_length), device=self._device)
         label_to_label_subattention = torch.tril(label_base_subattention)
 
         label_to_mask_subattention = torch.tril(label_base_subattention, diagonal=-1)
@@ -155,16 +167,22 @@ class HBGLModel(nn.Module):
 
         mask_to_mask_subattention = torch.eye(mask_length)
 
-        text_attention = torch.ones((batch_size, 1, length, text_length))
+        text_attention = torch.ones((batch_size, 1, length, text_length), device=self._device)
 
-        label_attention = torch.zeros((batch_size, 1, length, label_length))
+        label_attention = torch.zeros((batch_size, 1, length, label_length), device=self._device)
         label_attention[:, :, label_start_index:label_stop_index, :] = label_to_label_subattention
         label_attention[:, :, mask_start_index:mask_stop_index, :] = label_to_mask_subattention
 
-        mask_attention = torch.zeros((batch_size, 1, length, mask_length))
+        mask_attention = torch.zeros((batch_size, 1, length, mask_length), device=self._device)
         mask_attention[:, :, mask_start_index:mask_stop_index, :] = mask_to_mask_subattention
 
-        new_attention_mask = torch.cat([text_attention, label_attention, mask_attention], dim=3)
-        new_attention_mask = new_attention_mask * first_attention_mask * second_attention_mask
-        text_attention_mask_2d = new_attention_mask.bool()
-        return text_attention_mask_2d
+        bool_attention_mask = torch.cat([text_attention, label_attention, mask_attention], dim=3)
+        bool_attention_mask = bool_attention_mask * first_attention_mask * second_attention_mask
+        attention_mask = torch.where(
+            bool_attention_mask.bool(),
+            torch.tensor(0.0, device=bool_attention_mask.device),
+            torch.tensor(float("-inf"), device=bool_attention_mask.device),
+        )
+
+        self._last_attention_mask = attention_mask
+        return attention_mask

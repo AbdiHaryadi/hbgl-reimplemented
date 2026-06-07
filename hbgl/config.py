@@ -12,3 +12,14 @@ class HBGLConfig:
     @property
     def label_count(self):
         return len(self.label_list)
+
+class Hierarchy:
+    def __init__(self, label_level_map: dict[str, int]) -> None:
+        self._labels = list(label_level_map)
+        self._levels = [label_level_map[label] for label in self._labels]
+    
+    def get_labels(self):
+        return self._labels.copy()
+    
+    def get_levels(self):
+        return self._levels.copy()
