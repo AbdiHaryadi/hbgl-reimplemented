@@ -1,5 +1,5 @@
 import torch
-from torch.nn import BCEWithLogitsLoss
+from torch.nn import BCELoss
 
 from hbgl.config import HBGLConfig
 
@@ -10,7 +10,7 @@ class HBGLLoss:
     ):
         self._label_token_indices = [i for i in range(config.label_count)]
         self._label_level_indices = self._prepare_label_level_indices(config)
-        self._bce = BCEWithLogitsLoss(reduction="sum")
+        self._bce = BCELoss(reduction="sum")
     
     def _prepare_label_level_indices(
         self,

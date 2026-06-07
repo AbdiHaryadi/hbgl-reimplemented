@@ -2,6 +2,12 @@ import torch
 from transformers import BatchEncoding
 
 from hbgl.config import HBGLConfig
+from hbgl.utils import (
+    prepare_mask_inputs_from_label,
+    prepare_token_type_ids_from_input_ids,
+    prepare_position_ids_from_input_ids,
+    prepare_4d_attention_mask,
+)
 
 class HBGLDataCollator:
     def __init__(self, config: HBGLConfig):
@@ -57,4 +63,39 @@ class HBGLDataCollator:
             new_inputs[a] = torch.tensor(inputs[a])
         new_inputs[LABEL_ATTRIBUTE] = new_inputs[LABEL_ATTRIBUTE].float()
 
-        return BatchEncoding(new_inputs)
+        text_input_ids = new_inputs["input_ids"]
+        label_input_ids = new_inputs["label_input_ids"]
+
+        label_attention_mask = new_inputs["label_attention_mask"]
+
+        mask_input_ids, mask_attention_mask = prepare_mask_inputs_from_label(
+            label_input_ids=label_input_ids,
+            label_attention_mask=label_attention_mask,
+            mask_token_id=self._mask_token_id
+        )
+        token_type_ids = prepare_token_type_ids_from_input_ids(
+            text_input_ids=text_input_ids,
+            label_input_ids=label_input_ids,
+            mask_input_ids=mask_input_ids,
+        )
+        position_ids = prepare_position_ids_from_input_ids(
+            text_input_ids=new_inputs["input_ids"],
+            label_input_ids=new_inputs["label_input_ids"],
+            mask_input_ids=mask_input_ids,
+        )
+        attention_mask = prepare_4d_attention_mask(
+            text_attention_mask_2d=new_inputs["attention_mask"],
+            label_attention_mask_2d=new_inputs["label_attention_mask"],
+            mask_attention_mask_2d=mask_attention_mask,
+        )
+        labels = new_inputs[LABEL_ATTRIBUTE]
+
+        return BatchEncoding({
+            "text_input_ids": text_input_ids,
+            "label_input_ids": label_input_ids,
+            "mask_input_ids": mask_input_ids,
+            "token_type_ids": token_type_ids,
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+        })

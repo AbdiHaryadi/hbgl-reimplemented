@@ -8,6 +8,7 @@ class HBGLConfig:
     mask_token_id: int
 
     sep_label_id: int = -1
+    max_length: int | None = None
     
     @property
     def label_count(self):
