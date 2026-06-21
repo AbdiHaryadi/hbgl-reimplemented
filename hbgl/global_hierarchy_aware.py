@@ -18,10 +18,15 @@ class LabelEmbeddingsConfig:
     def __post_init__(self):
         for name, value in [
             ("lr", self.lr),
-            ("training_steps", self.training_steps),
             ("batch_size", self.batch_size),
         ]:
             if not (value > 0):
+                raise ValueError(f"Invalid {name}: {value}")
+            
+        for name, value in [
+            ("training_steps", self.training_steps),
+        ]:
+            if not (value >= 0):
                 raise ValueError(f"Invalid {name}: {value}")
             
         for name, value in [
