@@ -226,6 +226,7 @@ def init_label_embeddings(
             attention_mask=attention_mask,
         )
         h: torch.Tensor = encoder_outputs.last_hidden_state
+        h = h.to(device)
         logit_s = h @ label_embeddings.T
         masked_logit_s = logit_s[masked]
 
