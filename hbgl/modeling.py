@@ -17,21 +17,26 @@ class HBGLModel(nn.Module):
         self,
         bert: PreTrainedModel,
         config: HBGLConfig,
+        label_embeddings: torch.Tensor | None = None,
     ):
         super(HBGLModel, self).__init__()
         self.bert = bert
 
+        device = self.bert.device
         bert_embeddings = self._get_word_embeddings()
         embedding_dim = bert_embeddings.embedding_dim
-        self.label_embeddings = nn.Parameter(
-            torch.randn(
+        if label_embeddings == None:
+            label_embeddings = torch.randn(
                 (config.label_count, embedding_dim),
-                device=self.bert.device
+                device=device
             )
-        )
+        else:
+            label_embeddings = label_embeddings.to(device)
+
+        self.label_embeddings = nn.Parameter(label_embeddings)
 
         self.config = config
-        self._device = self.bert.device
+        self._device = device
 
     def _get_word_embeddings(self):
         embeddings = self.bert.get_input_embeddings()
