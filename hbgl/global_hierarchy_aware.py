@@ -169,10 +169,10 @@ def init_label_embeddings(
 ):
     device = next(bert_embeddings.parameters()).device
     for param in bert_embeddings.parameters():
-        assert param.device == device
+        assert param.device.type == device.type
     
     for param in bert_encoder.parameters():
-        assert param.device == device
+        assert param.device.type == device.type
 
     bert_token_embedding = bert_embeddings.word_embeddings
     if not isinstance(bert_token_embedding, nn.Embedding):
