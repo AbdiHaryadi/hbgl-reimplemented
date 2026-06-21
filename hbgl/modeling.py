@@ -4,14 +4,6 @@ from transformers import PreTrainedModel
 
 from hbgl.config import HBGLConfig
 
-def batch_arange_like(x: torch.Tensor):
-    batch_size = x.shape[0]
-    length = x.shape[1]
-
-    x = torch.arange(length, device=x.device)
-    x = x.repeat(batch_size, 1)
-    return x
-
 class HBGLModel(nn.Module):
     def __init__(
         self,
