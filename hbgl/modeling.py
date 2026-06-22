@@ -55,6 +55,12 @@ class HBGLModel(nn.Module):
         # Harusnya nanti di sini pakai input_embeds karena kita pakai label embeddings yang tidak ada dalam token.
         inputs_embeds = self._prepare_inputs_embeds(text_input_ids, label_input_ids, mask_input_ids)
         inputs_embeds = inputs_embeds.to(self._device)
+
+        print(self.bert.device)
+        print(inputs_embeds.device)
+        print(token_type_ids.device)
+        print(attention_mask.device)
+        print(position_ids.device)
         outputs = self.bert(
             inputs_embeds=inputs_embeds,
             token_type_ids=token_type_ids,
