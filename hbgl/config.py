@@ -9,6 +9,7 @@ class HBGLConfig:
 
     sep_label_id: int = -1
     max_length: int | None = None
+    loss_reduction: str = "sum"
     
     @property
     def label_count(self):

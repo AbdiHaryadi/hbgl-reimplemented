@@ -10,7 +10,7 @@ class HBGLLoss:
     ):
         self._label_token_indices = [i for i in range(config.label_count)]
         self._label_level_indices = self._prepare_label_level_indices(config)
-        self._bce = BCELoss(reduction="sum")
+        self._bce = BCELoss(reduction=config.loss_reduction)
     
     def _prepare_label_level_indices(
         self,

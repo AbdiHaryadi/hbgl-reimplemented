@@ -14,6 +14,7 @@ class LabelEmbeddingsConfig:
     batch_size: int = 1
     initial_mask_ratio: float = 0.15
     mask_ratio_upper_bound: float = 0.45
+    loss_reduction: str = "sum"
 
     def __post_init__(self):
         for name, value in [
@@ -35,6 +36,9 @@ class LabelEmbeddingsConfig:
         ]:
             if not (0 <= value <= 1):
                 raise ValueError(f"Invalid {name}: {value}")
+            
+        if not (self.loss_reduction in ["sum", "mean"]):
+            raise ValueError(f"Invalid loss_reduction: {self.loss_reduction}")
 
 def init_label_embeddings_with_averaging(
     token_embedding: nn.Embedding,
@@ -198,7 +202,7 @@ def init_label_embeddings(
         params=[label_embeddings_parameter],
         lr=config.lr
     )
-    criterion = nn.BCEWithLogitsLoss(reduction="sum")
+    criterion = nn.BCEWithLogitsLoss(reduction=config.loss_reduction)
 
     history: list[float] = []
     pbar = tqdm(range(config.training_steps))
@@ -239,7 +243,7 @@ def init_label_embeddings(
 
         mask_num = masked.int().sum().cpu().item()
         loss_value = loss.cpu().item()
-        if mask_num > 0:
+        if config.loss_reduction == "sum" and mask_num > 0:
             loss_value = loss_value / mask_num
         pbar.set_description(f"Epoch {t + 1} - Loss: {loss_value:.4f}")
         history.append(loss_value)
