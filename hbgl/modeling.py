@@ -54,6 +54,7 @@ class HBGLModel(nn.Module):
 
         # Harusnya nanti di sini pakai input_embeds karena kita pakai label embeddings yang tidak ada dalam token.
         inputs_embeds = self._prepare_inputs_embeds(text_input_ids, label_input_ids, mask_input_ids)
+        inputs_embeds = inputs_embeds.to(self._device)
         outputs = self.bert(
             inputs_embeds=inputs_embeds,
             token_type_ids=token_type_ids,
@@ -65,6 +66,7 @@ class HBGLModel(nn.Module):
             raise ValueError("last_hidden_state is not a torch.Tensor")
         
         # Ini ukurannya [batch_size, text_len + label_len + mask_len, dimension]
+        last_hidden_state = last_hidden_state.to(self._device)
         last_hidden_state = last_hidden_state[:, -mask_input_ids.shape[1]:]
         scores = torch.matmul(last_hidden_state, self.label_embeddings.T)
         scores = torch.sigmoid(scores)
