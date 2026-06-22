@@ -5,6 +5,10 @@ from transformers import PreTrainedModel
 from hbgl.config import HBGLConfig
 
 class HBGLModel(nn.Module):
+    """
+    Note: This model doesn't support multiple GPU.
+    """
+
     def __init__(
         self,
         bert: PreTrainedModel,
