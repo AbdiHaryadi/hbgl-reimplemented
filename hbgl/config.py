@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 @dataclass
 class HBGLConfig:
@@ -13,6 +13,9 @@ class HBGLConfig:
     @property
     def label_count(self):
         return len(self.label_list)
+    
+    def to_dict(self):
+        return asdict(self)
 
 def child_map_to_label_level_map(child_map: dict[str, list[str]]):
     label_level_map: dict[str, int] = {}
