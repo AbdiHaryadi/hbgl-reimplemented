@@ -3,6 +3,11 @@ import torch.nn as nn
 from transformers import PreTrainedModel
 
 from hbgl.config import HBGLConfig
+from hbgl.utils import (
+    prepare_4d_boolean_attention_mask_with_size,
+    prepare_position_ids_from_size,
+    prepare_token_type_ids_from_size,
+)
 
 class HBGLModel(nn.Module):
     """
@@ -102,3 +107,99 @@ class HBGLModel(nn.Module):
             label_embeds,
             mask_embeds,
         ], dim=1)
+
+def generate(
+        model: HBGLModel,
+        config: HBGLConfig,
+        input_ids: list[int],
+        max_length: int = -1,
+):
+    device = model.bert.device
+
+    text_input_ids = torch.tensor([input_ids], dtype=torch.long, device=device)
+    text_embeds = model._forward_word_embeddings(text_input_ids)
+    label_embeds = torch.empty((1, 0, text_embeds.shape[-1]), device=device)
+    mask_input_ids = torch.tensor([[config.mask_token_id]], dtype=torch.long, device=device)
+    mask_embeds = model._forward_word_embeddings(mask_input_ids)
+
+    stop = False
+    scores = torch.empty((0, config.label_count), device=device)
+
+    while not stop:
+        inputs_embeds = torch.cat([text_embeds, label_embeds, mask_embeds], dim=1)
+
+        bool_attention_mask = prepare_4d_boolean_attention_mask_with_size(
+            batch_size=1,
+            text_length=text_embeds.shape[1],
+            label_length=label_embeds.shape[1],
+            mask_length=mask_embeds.shape[1],
+        )
+        attention_mask = torch.where(
+            bool_attention_mask.bool(),
+            torch.tensor(0.0, device=bool_attention_mask.device),
+            torch.tensor(-1e9, device=bool_attention_mask.device),
+        )
+        attention_mask = attention_mask.to(device)
+
+        token_type_ids = prepare_token_type_ids_from_size(
+            batch_size=1,
+            text_length=text_embeds.shape[1],
+            label_length=label_embeds.shape[1],
+            mask_length=mask_embeds.shape[1],
+        )
+        token_type_ids = token_type_ids.to(device)
+
+        position_ids = prepare_position_ids_from_size(
+            batch_size=1,
+            text_length=text_embeds.shape[1],
+            label_length=label_embeds.shape[1],
+            mask_length=mask_embeds.shape[1],
+        )
+        position_ids = position_ids.to(device)
+
+        outputs = model.bert(
+            inputs_embeds=inputs_embeds,
+            token_type_ids=token_type_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )
+        last_hidden_state = outputs.last_hidden_state
+        if not isinstance(last_hidden_state, torch.Tensor):
+            raise ValueError("last_hidden_state is not a torch.Tensor")
+        
+        # Ini ukurannya [batch_size (1), text_len + label_len + mask_len (1), dimension]
+        last_hidden_state = last_hidden_state[:, -1]
+        # Now the dimension is only [1, dimension], want to be multiplied by [label_length, dimension]
+        # Result should be [1, label_length]
+        current_scores = torch.matmul(last_hidden_state, model.label_embeddings.T)
+        current_scores = torch.sigmoid(current_scores)
+        current_predictions = torch.where(current_scores > 0.5, True, False)
+        current_sum_predictions = current_predictions.sum().item()
+        
+        scores = torch.cat([scores, current_scores], dim=0)
+
+        if current_sum_predictions == 0 or scores.shape[0] == max_length:
+            stop = True
+        else:
+            local_embeds = model.label_embeddings[current_predictions[0]].sum(dim=0)
+            local_embeds = local_embeds.unsqueeze(0)
+            local_embeds = local_embeds.unsqueeze(1)
+            # Now the size should be [1, 1, dimension]
+
+            # label_embeds: [1, ..., dimension]
+            label_embeds = torch.cat([label_embeds, local_embeds], dim=1)
+
+    return scores
+
+def scores_to_labels(
+        config: HBGLConfig,
+        scores: torch.Tensor,
+):
+    result: list[int] = []
+    for current_level_index, scores_at_current_level in enumerate(scores):
+        current_level = current_level_index + 1
+        for current_label_index, current_score in enumerate(scores_at_current_level):
+            if current_score > 0.5 and current_level == config.label_levels[current_label_index]:
+                result.append(current_label_index)
+    
+    return result
