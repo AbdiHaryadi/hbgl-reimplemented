@@ -88,3 +88,6 @@ class Hierarchy:
             label not in self._data
             or len(self._data[label]) == 0
         )
+    
+    def get_label_level(self, label: str):
+        return self._levels[self._labels.index(label)]

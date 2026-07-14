@@ -15,6 +15,9 @@ class LabelEmbeddingsConfig:
     initial_mask_ratio: float = 0.15
     mask_ratio_upper_bound: float = 0.45
     loss_reduction: str = "sum"
+    token_type_id: int = 1
+    use_cls_token: bool = False
+    strategy: str = "jiang"
 
     def __post_init__(self):
         for name, value in [
@@ -39,6 +42,9 @@ class LabelEmbeddingsConfig:
             
         if not (self.loss_reduction in ["sum", "mean"]):
             raise ValueError(f"Invalid loss_reduction: {self.loss_reduction}")
+        
+        if not (self.strategy in ["jiang", "averaging"]):
+            raise ValueError(f"Invalid strategy: {self.strategy}")
 
 def init_label_embeddings_with_averaging(
     token_embedding: nn.Embedding,
@@ -62,12 +68,28 @@ def init_label_embeddings_with_averaging(
     result = torch.stack(embeddings)
     return result
 
-def init_2d_attention_mask(hierarchy: Hierarchy):
+def init_2d_attention_mask(hierarchy: Hierarchy, config: LabelEmbeddingsConfig):
     labels = hierarchy.get_labels()
     num_labels = len(labels)
     result = []
+    if config.use_cls_token:
+        row = [1]
+        for j in range(num_labels):
+            if hierarchy.get_label_level(labels[j]) == 1:
+                row.append(1)
+            else:
+                row.append(0)
+
+        result.append(row)
+
     for i in range(num_labels):
         row = []
+        if config.use_cls_token:
+            if hierarchy.get_label_level(labels[i]) == 1:
+                row.append(1)
+            else:
+                row.append(0)
+
         for j in range(num_labels):
             if (
                 i == j
@@ -77,14 +99,16 @@ def init_2d_attention_mask(hierarchy: Hierarchy):
                 row.append(0)
             else:
                 row.append(1)
+        
         result.append(row)
     return torch.tensor(result)
 
 def prepare_input_masked_label_embeddings(
         bert_embeddings: nn.Module,
         bert_token_embedding: nn.Embedding,
-        mask_token_id: int,
+        tokenizer: PreTrainedTokenizer,
         hierarchy: Hierarchy,
+        config: LabelEmbeddingsConfig,
         label_embeddings: torch.Tensor,
         masked: torch.Tensor,
 ):
@@ -93,13 +117,26 @@ def prepare_input_masked_label_embeddings(
     assert masked.device == device
 
     with torch.no_grad():
-        mask_token_vector = bert_token_embedding(torch.tensor(mask_token_id, device=device))
-    position_ids = torch.tensor(hierarchy.get_levels(), device=device)
-    token_type_ids = torch.ones_like(position_ids)
+        mask_token_vector = bert_token_embedding(torch.tensor(tokenizer.mask_token_id, device=device))
+        if config.use_cls_token:
+            cls_token_vector = bert_token_embedding(torch.tensor(tokenizer.cls_token_id, device=device))
+        else:
+            cls_token_vector = None
 
     batch_size = masked.shape[0]
     new_label_embeddings = label_embeddings.repeat(batch_size, 1, 1)
-    new_label_embeddings[masked] = mask_token_vector.to(device)
+    new_label_embeddings[masked] = mask_token_vector.to(device)  # L x d
+
+    levels = hierarchy.get_levels()
+    if cls_token_vector is not None:
+        new_label_embeddings = torch.cat([
+            cls_token_vector.unsqueeze(0),
+            new_label_embeddings,
+        ])
+        levels.insert(0, 0)
+
+    position_ids = torch.tensor(levels, device=device)
+    token_type_ids = torch.full_like(position_ids, config.token_type_id)
 
     input_embeddings = bert_embeddings(
         token_type_ids=token_type_ids,
@@ -111,7 +148,7 @@ def prepare_input_masked_label_embeddings(
 def generate_input_embeddings(
         bert_token_embedding: nn.Embedding,
         bert_embeddings: nn.Module,
-        mask_token_id: int,
+        tokenizer: PreTrainedTokenizer,
         hierarchy: Hierarchy,
         config: LabelEmbeddingsConfig,
         label_embeddings: torch.Tensor,
@@ -127,8 +164,9 @@ def generate_input_embeddings(
     return prepare_input_masked_label_embeddings(
         bert_embeddings=bert_embeddings,
         bert_token_embedding=bert_token_embedding,
-        mask_token_id=mask_token_id,
+        tokenizer=tokenizer,
         hierarchy=hierarchy,
+        config=config,
         label_embeddings=label_embeddings,
         masked=masked,
     ), masked
@@ -172,12 +210,6 @@ def init_label_embeddings(
     config: LabelEmbeddingsConfig,
 ):
     device = next(bert_embeddings.parameters()).device
-    for param in bert_embeddings.parameters():
-        assert param.device.type == device.type
-    
-    for param in bert_encoder.parameters():
-        assert param.device.type == device.type
-
     bert_token_embedding = bert_embeddings.word_embeddings
     if not isinstance(bert_token_embedding, nn.Embedding):
         raise ValueError("Cannot extract BERT token embedding")
@@ -189,14 +221,29 @@ def init_label_embeddings(
         label_names=label_names,
     )
     label_embeddings = label_embeddings.to(device)
+
+    if config.strategy != "jiang":
+        return label_embeddings, None
+    
+    return train_label_embeddings(bert_embeddings, bert_encoder, tokenizer, hierarchy, config, label_embeddings)
+
+def train_label_embeddings(
+    bert_embeddings: nn.Module,
+    bert_encoder: nn.Module,
+    tokenizer: PreTrainedTokenizer,
+    hierarchy: Hierarchy,
+    config: LabelEmbeddingsConfig,
+    label_embeddings: torch.Tensor,
+):
+    device = next(bert_embeddings.parameters()).device
+    bert_token_embedding = bert_embeddings.word_embeddings
+    if not isinstance(bert_token_embedding, nn.Embedding):
+        raise ValueError("Cannot extract BERT token embedding")
+
     label_embeddings_parameter = nn.Parameter(label_embeddings)
 
-    attention_mask = init_2d_attention_mask(hierarchy)
+    attention_mask = init_2d_attention_mask(hierarchy, config)
     attention_mask = attention_mask.to(device)
-    
-    mask_token_id = tokenizer.mask_token_id
-    if not isinstance(mask_token_id, int):
-        raise ValueError(f"Invalid non-int mask_token_id: {mask_token_id}")
 
     optimizer = torch.optim.AdamW(
         params=[label_embeddings_parameter],
@@ -219,7 +266,7 @@ def init_label_embeddings(
         input_embeddings, masked = generate_input_embeddings(
             bert_token_embedding=bert_token_embedding,
             bert_embeddings=bert_embeddings,
-            mask_token_id=mask_token_id,
+            tokenizer=tokenizer,
             hierarchy=hierarchy,
             config=config,
             label_embeddings=label_embeddings,
