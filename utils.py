@@ -336,7 +336,7 @@ def load_and_cache_examples(
 
     if cached_features_file is not None and os.path.isfile(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
+        features = torch.load(cached_features_file, weights_only=False)
     elif cached_features_file is not None and os.path.isdir(cached_features_file) \
         and os.path.exists(os.path.join(cached_features_file, 'lock.mdb')):
         logger.info("Loading features from cached LMDB %s", cached_features_file)
@@ -437,7 +437,7 @@ def load_and_cache_examples_fast(
 
     if cached_features_file is not None and os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
+        features = torch.load(cached_features_file, weights_only=False)
     else:
         logger.info("Creating features from dataset file at %s", example_file)
 
