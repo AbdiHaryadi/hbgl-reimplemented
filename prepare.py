@@ -234,7 +234,7 @@ def get_model_and_tokenizer(args):
             label_mask = label_name_tensors != tokenizer.pad_token_id
             init_label_emb = (label_mask.unsqueeze(-1) * init_label_emb).sum(1)
         label_tokens = [i for i in range(len(label_map))]
-        tokenizer.add_tokens([label_map[label] for label in labels_key])
+        tokenizer.add_tokens([label_map[label].lower() for label in labels_key])
         #import pdb;pdb.set_trace()
         #labels_embeds = torch.nn.Embedding(len(label_tokens), config.hidden_size).weight.data
         if args.label_cpt:
