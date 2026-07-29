@@ -81,7 +81,8 @@ def training_cpt(args, tokenizer, input_ids, attention_mask,  position_ids, _ini
     if args.label_cpt_decodewithpos:
         position_ids[:, 1:-1] += args.max_source_seq_length - 1
         position_ids[:, -1] = args.max_source_seq_length + args.max_target_seq_length - 1
-    attention_mask = attention_mask.unsqueeze(0).repeat(bs, 1, 1).cuda().long()
+    attention_mask = attention_mask.unsqueeze(0).repeat(bs, 1, 1).unsqueeze(1).cuda()
+    attention_mask = (1.0 - attention_mask) * -10000.0
     for step in range(args.label_cpt_steps):
         if args.label_cpt_not_incr_mask_ratio:
             c_mask_ratio = mask_ratio
