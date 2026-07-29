@@ -1,13 +1,15 @@
 import json
-import numpy as np
-from sklearn.model_selection import train_test_split
 import re
+import sys
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 """
 WoS Reference: https://github.com/kk7nc/HDLTex
 """
 
-FILE_DIR = 'Meta-data/Data.txt'
 total_len = []
 np.random.seed(7)
 
@@ -38,18 +40,15 @@ stats = {'Root': {'CS': 0, 'Medical': 0, 'Civil': 0, 'ECE': 0, 'biochemistry': 0
 # 5-10 ['Bipolar Disorder', 'Schizophrenia']
 # 5-17 ['Digestive Health', 'Outdoor Health']
 
-def get_data_from_meta():
-    f = open(FILE_DIR, 'r')
-    origin_txt = f.readlines()
-    f.close()
+def get_data_from_meta(input_file_dir):
+    df = pd.read_excel(input_file_dir)
+
     data = []
     label_check = {}
-    for line in origin_txt[1:]:
-        line = line.rstrip('\n')
-        line = line.split('\t')
-        assert len(line) == 7
-        sample_label = [line[3].rstrip().lstrip(), line[4].rstrip().lstrip()]
-        code = str(line[0]) + '-' + str(line[1])
+    for _, row in df.iterrows():
+        # Index(['Y1', 'Y2', 'Y', 'Domain', 'area', 'keywords', 'Abstract'], dtype='str')
+        sample_label = [row["Domain"].rstrip().lstrip(), row["area"].rstrip().lstrip()]
+        code = str(row["Y1"]) + '-' + str(row["Y2"])
 
         if code in label_check.keys():
             if sample_label[1] not in label_check[code]:
@@ -60,19 +59,7 @@ def get_data_from_meta():
             if stats[sample_label[0]][i] > stats[sample_label[0]][sample_label[1]]:
                 sample_label[1] = i
                 break
-        # if sample_label[1] == 'Underwater Windmill':
-        #     sample_label[1] = 'Water Pollution'
-        # if sample_label[1] == 'Bamboo as a Building Material':
-        #     sample_label[1] = 'Water Pollution'
-        # if sample_label[1] == 'Nano Concrete':
-        #     sample_label[1] = 'Smart Material'
-        # if sample_label[1] == 'Highway Network System':
-        #     sample_label[1] = 'Geotextile'
-        # if sample_label[1] == 'Transparent Concrete':
-        #     sample_label[1] = 'Smart Material'
-        # if sample_label[1] == 'Outdoor Health':
-        #     sample_label[1] = ''
-        doc = line[6]
+        doc = row["Abstract"]
         doc = clean_str(doc)
         sample_text = doc
         total_len.append(len(sample_text))
@@ -145,6 +132,7 @@ def get_hierarchy():
 
 
 if __name__ == '__main__':
-    get_data_from_meta()
+    file_dir = sys.argv[1]
+    get_data_from_meta(file_dir)
     get_hierarchy()
     split_train_dev_test()
