@@ -173,15 +173,7 @@ def main(flags=None):
         tokenizer.add_tokens([label_map[label] for label in labels_key])
         add_token_num = len(labels_key)
 
-    if args.model_type == "roberta":
-        vocab = tokenizer.encoder
-    elif args.model_type == "xlm-roberta":
-        vocab = {}
-        for tk_id in range(len(tokenizer)):
-            tk = tokenizer._convert_id_to_token(tk_id)
-            vocab[tk] = tk_id
-    else:
-        vocab = tokenizer.vocab
+    vocab = tokenizer.vocab
 
     if hasattr(tokenizer, 'model_max_length'):
         tokenizer.model_max_length = args.max_seq_length
@@ -310,10 +302,7 @@ def main(flags=None):
                             if t in (tokenizer.sep_token, tokenizer.pad_token):
                                 break
                             output_tokens.append(t)
-                        if args.model_type == "roberta" or args.model_type == "xlm-roberta":
-                            output_sequence = tokenizer.convert_tokens_to_string(output_tokens)
-                        else:
-                            output_sequence = ' '.join(detokenize(output_tokens))
+                        output_sequence = ' '.join(detokenize(output_tokens))
                         if '\n' in output_sequence:
                             output_sequence = " [X_SEP] ".join(output_sequence.split('\n'))
                         output_lines[buf_id[i]] = output_sequence
@@ -339,15 +328,8 @@ def main(flags=None):
             except:
                 return 0
 
-        if args.model_type == 'roberta':
-            def roberta_token_to_id(token):
-                token = token.replace("<s>", '').replace('[A_', ' ').replace(']', ' ').split(' ')
-                token = [int(i) for i in token if i != '']
-                return token
-            predict_labels = [roberta_token_to_id(i) for i in output_lines]
-        else:
-            predict_labels = [i.replace("\n", '').split(' ') for i in output_lines]
-            predict_labels = [list(set([token_to_id(j) for j  in i])) for i in predict_labels]
+        predict_labels = [i.replace("\n", '').split(' ') for i in output_lines]
+        predict_labels = [list(set([token_to_id(j) for j  in i])) for i in predict_labels]
         with open(args.input_file) as f:
             gd_labels = [json.loads(i)['tgt'] for i in f]
             gd_labels = [[token_to_id(j) for j  in i.split(' ')] for i in gd_labels]

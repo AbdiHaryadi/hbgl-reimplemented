@@ -214,7 +214,7 @@ def train(
 
                     save_path = save_step(args, model, optimizer, global_step, scheduler)
 
-                    flags = ['--model_type'     , args.model_type                          ,
+                    flags = [
                     '--tokenizer_name'         , args.model_name_or_path             ,
                      '--input_file'             , args.valid_file                  ,
                      '--split'                  , 'valid'                         ,
@@ -240,9 +240,6 @@ def train(
                         flags.append(args.train_file)
                     if args.label_cpt_decodewithpos:
                         flags.append('--target_no_offset')
-
-                    if args.model_type == 'roberta':
-                        del flags[flags.index('--do_lower_case')]
 
                     out = test.main(flags)
                     if out:

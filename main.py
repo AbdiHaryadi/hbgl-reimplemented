@@ -187,7 +187,7 @@ def test(args, best_macro_f1_path, best_micro_f1_path):
     bout = None
     for i, save_path in enumerate([best_micro_f1_path, best_macro_f1_path]):
         if save_path is None: continue
-        flags = ['--model_type'     , args.model_type                          ,
+        flags = [
             '--tokenizer_name'         , args.model_name_or_path             ,
             '--input_file'             , args.test_file                  ,
             '--split'                  , 'test'                         ,
@@ -211,8 +211,6 @@ def test(args, best_macro_f1_path, best_micro_f1_path):
         if args.soft_label_hier_real:
             flags.append('--soft_label_hier_real_with_train_file')
             flags.append(args.train_file)
-        if args.model_type == 'roberta':
-            del flags[flags.index('--do_lower_case')]
         if args.label_cpt_decodewithpos:
             flags.append('--target_no_offset')
 
