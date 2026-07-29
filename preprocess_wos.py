@@ -1,4 +1,5 @@
 import json
+import pickle
 import re
 import sys
 
@@ -40,7 +41,7 @@ stats = {'Root': {'CS': 0, 'Medical': 0, 'Civil': 0, 'ECE': 0, 'biochemistry': 0
 # 5-10 ['Bipolar Disorder', 'Schizophrenia']
 # 5-17 ['Digestive Health', 'Outdoor Health']
 
-def get_data_from_meta(input_file_dir):
+def get_data_from_meta(input_file_dir: str, output_file_dir: str):
     df = pd.read_excel(input_file_dir)
 
     data = []
@@ -72,15 +73,20 @@ def get_data_from_meta(input_file_dir):
             c += len(label_check[i]) - 1
     print(c)
     print(len(label_check.keys()))
-    f = open('wos_total.json', 'w')
+    f = open(output_file_dir, 'w')
     for line in data:
         line = json.dumps(line)
         f.write(line + '\n')
     f.close()
 
 
-def split_train_dev_test():
-    f = open('wos_total.json', 'r')
+def split_train_dev_test(
+        input_total_dir: str,
+        output_train_dir: str,
+        output_val_dir: str,
+        output_test_dir: str,
+):
+    f = open(input_total_dir, 'r')
     data = f.readlines()
     f.close()
     id = [i for i in range(46985)]
@@ -92,22 +98,22 @@ def split_train_dev_test():
     train = list(train)
     val = list(val)
     test = list(test)
-    f = open('wos_train.json', 'w')
+    f = open(output_train_dir, 'w')
     f.writelines(train)
     f.close()
-    f = open('wos_test.json', 'w')
-    f.writelines(test)
-    f.close()
-    f = open('wos_val.json', 'w')
+    f = open(output_val_dir, 'w')
     f.writelines(val)
+    f.close()
+    f = open(output_test_dir, 'w')
+    f.writelines(test)
     f.close()
 
     print(len(train), len(val), len(test))
     return
 
 
-def get_hierarchy():
-    f = open('wos_total.json', 'r')
+def get_hierarchy(input_total_dir: str):
+    f = open(input_total_dir, 'r')
     data = f.readlines()
     f.close()
     label_hierarchy = {}
@@ -131,8 +137,68 @@ def get_hierarchy():
     f.close()
 
 
+def additional_step(
+        input_train_dir: str,
+        input_val_dir: str,
+        input_test_dir: str,
+        output_label_map_dir: str,
+):
+    files=  [input_train_dir, input_val_dir, input_test_dir]
+
+    datasets = {}
+    label_sets = set()
+    for i in files:
+        datasets[i] = [json.loads(f) for f in open(i)]
+        label_sets |= set(sum([j['doc_label'] for j in datasets[i]], []))
+
+    label_list = sorted(list(label_sets))
+    label_map = {label: f'[A_{i}]' for i, label in enumerate(label_list)}
+
+    with open(output_label_map_dir, 'wb') as f:
+        pickle.dump(label_map, f)
+
+    def label_to_tgt(labels):
+        labels = [label_map[i] for i in labels]
+        return ' '.join(labels)
+
+    def label_to_tgt_list(labels):
+        labels = [label_map[i] for i in labels]
+        return [[i] for i in labels]
+
+
+    for file_name in datasets:
+        assert '.json' in file_name
+        if 'train' in file_name:
+            with open(file_name.replace('.json', '_generated_tl.json'), 'w') as f:
+                for l in datasets[file_name]:
+                    f.write(json.dumps({'src': l['doc_token'],
+                                        'tgt': label_to_tgt_list(l['doc_label']) }) + '\n')
+        else:
+            with open(file_name.replace('.json', '_generated.json'), 'w') as f:
+                for l in datasets[file_name]:
+                    f.write(json.dumps({'src': l['doc_token'],
+                                        'tgt': label_to_tgt(l['doc_label']) }) + '\n')
+
+
 if __name__ == '__main__':
-    file_dir = sys.argv[1]
-    get_data_from_meta(file_dir)
-    get_hierarchy()
-    split_train_dev_test()
+    raw_file_dir = sys.argv[1]
+    total_file_dir = 'wos_total.json'
+    train_file_dir = 'wos_train.json'
+    val_file_dir = 'wos_val.json'
+    test_file_dir = 'wos_test.json'
+    label_map_file_dir = 'label_map.pkl'
+
+    get_data_from_meta(input_file_dir=raw_file_dir, output_file_dir=total_file_dir)
+    get_hierarchy(input_total_dir=total_file_dir)
+    split_train_dev_test(
+        input_total_dir=total_file_dir,
+        output_train_dir=train_file_dir,
+        output_val_dir=val_file_dir,
+        output_test_dir=test_file_dir,
+    )
+    additional_step(
+        input_train_dir=train_file_dir,
+        input_val_dir=val_file_dir,
+        input_test_dir=test_file_dir,
+        output_label_map_dir=label_map_file_dir,
+    )
