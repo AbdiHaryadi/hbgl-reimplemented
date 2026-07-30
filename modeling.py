@@ -576,6 +576,7 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
                  torch.ones_like(pseudo_ids) * self.target_type_id,
                  torch.ones_like(pseudo_ids) * self.target_type_id), dim=1)
         else:
+            input_embeds = None
             input_ids = torch.cat((source_ids, target_ids, pseudo_ids), dim=1)
             token_type_ids = torch.cat(
                 (torch.ones_like(source_ids) * self.source_type_id,
