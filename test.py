@@ -17,10 +17,10 @@ import numpy as np
 from tqdm import tqdm
 
 import torch
-from transformers import BertTokenizer
+from transformers import BertConfig, BertTokenizer
 
 from eval import evaluate
-from modeling_decoding import BertForSeq2SeqDecoder, BertConfig
+from modeling_decoding import BertForSeq2SeqDecoder
 import seq2seq_loader
 from utils import load_and_cache_examples, load_and_cache_examples_fast
 
@@ -233,7 +233,7 @@ def main(flags=None):
 
         if args.fp16:
             model.half()
-        model.to(device)
+        model.to(device)  # type: ignore
         if n_gpu > 1:
             model = torch.nn.DataParallel(model)
 
