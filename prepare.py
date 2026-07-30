@@ -297,6 +297,7 @@ def get_model_and_tokenizer(args):
 
         model.bert.embeddings.word_embeddings.weight.data = torch.cat([model.bert.embeddings.word_embeddings.weight.data, init_label_emb], dim=0)
         model.bert.embeddings.word_embeddings.num_embeddings += len(label_tokens)
+        model.cls.predictions.decoder_weight.data = torch.cat([model.cls.predictions.decoder_weight.data, init_label_emb], dim=0)
         model.cls.predictions.bias.data =  torch.cat([model.cls.predictions.bias.data, torch.zeros(len(label_tokens))],
                                                         dim=0)
         vs = config.vocab_size
