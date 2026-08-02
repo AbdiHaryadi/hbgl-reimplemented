@@ -69,17 +69,8 @@ class BertEmbeddings(nn.Module):
         else:
             self.token_type_embeddings = nn.Embedding(
                 config.type_vocab_size, config.hidden_size)
-        if hasattr(config, 'fp32_embedding'):
-            self.fp32_embedding = config.fp32_embedding
-        else:
-            self.fp32_embedding = False
-
-        if hasattr(config, 'new_pos_ids') and config.new_pos_ids:
-            self.num_pos_emb = 4
-        else:
-            self.num_pos_emb = 1
         self.position_embeddings = nn.Embedding(
-            config.max_position_embeddings, config.hidden_size * self.num_pos_emb)
+            config.max_position_embeddings, config.hidden_size)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -107,20 +98,11 @@ class BertEmbeddings(nn.Module):
             words_embeddings = inputs_embeds
 
         position_embeddings = self.position_embeddings(position_ids)
-
-        if self.num_pos_emb > 1:
-            num_batch = position_embeddings.size(0)
-            num_pos = position_embeddings.size(1)
-            position_embeddings = position_embeddings.view(
-                num_batch, num_pos, self.num_pos_emb, -1)[torch.arange(0, num_batch).long(), :, task_idx, :]
-
         embeddings = words_embeddings + position_embeddings
 
         if self.token_type_embeddings is not None:
             embeddings = embeddings + self.token_type_embeddings(token_type_ids)
 
-        if self.fp32_embedding:
-            embeddings = embeddings.half()
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -138,17 +120,12 @@ class BertSelfAttention(nn.Module):
             config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        if hasattr(config, 'num_qkv') and (config.num_qkv > 1):
-            self.num_qkv = config.num_qkv
-        else:
-            self.num_qkv = 1
-
         self.query = nn.Linear(
-            config.hidden_size, self.all_head_size * self.num_qkv)
+            config.hidden_size, self.all_head_size)
         self.key = nn.Linear(config.hidden_size,
-                             self.all_head_size * self.num_qkv)
+                             self.all_head_size)
         self.value = nn.Linear(
-            config.hidden_size, self.all_head_size * self.num_qkv)
+            config.hidden_size, self.all_head_size)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
@@ -157,37 +134,12 @@ class BertSelfAttention(nn.Module):
         if self.uni_debug_flag:
             self.register_buffer('debug_attention_probs',
                                  torch.zeros((512, 512)))
-        if hasattr(config, 'seg_emb') and config.seg_emb:
-            self.b_q_s = nn.Parameter(torch.zeros(
-                1, self.num_attention_heads, 1, self.attention_head_size))
-            self.seg_emb = nn.Embedding(
-                config.type_vocab_size, self.all_head_size)
-        else:
-            self.b_q_s = None
-            self.seg_emb = None
 
     def transpose_for_scores(self, x, mask_qkv=None):
-        if self.num_qkv > 1:
-            sz = x.size()[:-1] + (self.num_qkv,
-                                  self.num_attention_heads, self.all_head_size)
-            # (batch, pos, num_qkv, head, head_hid)
-            x = x.view(*sz)
-            if mask_qkv is None:
-                x = x[:, :, 0, :, :]
-            elif isinstance(mask_qkv, int):
-                x = x[:, :, mask_qkv, :, :]
-            else:
-                # mask_qkv: (batch, pos)
-                if mask_qkv.size(1) > sz[1]:
-                    mask_qkv = mask_qkv[:, :sz[1]]
-                # -> x: (batch, pos, head, head_hid)
-                x = x.gather(2, mask_qkv.view(sz[0], sz[1], 1, 1, 1).expand(
-                    sz[0], sz[1], 1, sz[3], sz[4])).squeeze(2)
-        else:
-            sz = x.size()[:-1] + (self.num_attention_heads,
-                                  self.attention_head_size)
-            # (batch, pos, head, head_hid)
-            x = x.view(*sz)
+        sz = x.size()[:-1] + (self.num_attention_heads,
+                                self.attention_head_size)
+        # (batch, pos, head, head_hid)
+        x = x.view(*sz)
         # (batch, head, pos, head_hid)
         return x.permute(0, 2, 1, 3)
 
@@ -233,15 +185,6 @@ class BertSelfAttention(nn.Module):
             query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
         if rel_pos is not None:
             attention_scores = attention_scores + rel_pos
-
-        if self.seg_emb is not None:
-            seg_rep = self.seg_emb(seg_ids)
-            # (batch, pos, head, head_hid)
-            seg_rep = seg_rep.view(seg_rep.size(0), seg_rep.size(
-                1), self.num_attention_heads, self.attention_head_size)
-            qs = torch.einsum('bnih,bjnh->bnij',
-                              query_layer + self.b_q_s, seg_rep)
-            attention_scores = attention_scores + qs
 
         # attention_scores = attention_scores / math.sqrt(self.attention_head_size)
 
@@ -413,8 +356,6 @@ class BertPredictionHeadTransform(nn.Module):
         self.transform_act_fn = ACT2FN[config.hidden_act] \
             if isinstance(config.hidden_act, str) else config.hidden_act
         hid_size = config.hidden_size
-        if hasattr(config, 'relax_projection') and (config.relax_projection > 1):
-            hid_size *= config.relax_projection
         self.dense = nn.Linear(config.hidden_size, hid_size)
         self.LayerNorm = BertLayerNorm(hid_size, eps=1e-5)
 
@@ -438,38 +379,13 @@ class BertLMPredictionHead(nn.Module):
         self.decoder.weight = bert_model_embedding_weights
         self.bias = nn.Parameter(torch.zeros(
             bert_model_embedding_weights.size(0)))
-        if hasattr(config, 'relax_projection') and (config.relax_projection > 1):
-            self.relax_projection = config.relax_projection
-        else:
-            self.relax_projection = 0
-        self.fp32_embedding = config.fp32_embedding
-
-        def convert_to_type(tensor):
-            if self.fp32_embedding:
-                return tensor.half()
-            else:
-                return tensor
-
-        self.type_converter = convert_to_type
         self.converted = False
 
     def forward(self, hidden_states, task_idx=None):
         if not self.converted:
             self.converted = True
-            if self.fp32_embedding:
-                self.transform.half()
-        hidden_states = self.transform(self.type_converter(hidden_states))
-        if self.relax_projection > 1:
-            num_batch = hidden_states.size(0)
-            num_pos = hidden_states.size(1)
-            # (batch, num_pos, relax_projection*hid) -> (batch, num_pos, relax_projection, hid) -> (batch, num_pos, hid)
-            hidden_states = hidden_states.view(
-                num_batch, num_pos, self.relax_projection, -1)[torch.arange(0, num_batch).long(), :, task_idx, :]
-        if self.fp32_embedding:
-            hidden_states = F.linear(self.type_converter(hidden_states), self.type_converter(
-                self.decoder.weight), self.type_converter(self.bias))
-        else:
-            hidden_states = self.decoder(hidden_states) + self.bias
+        hidden_states = self.transform(hidden_states)
+        hidden_states = self.decoder(hidden_states) + self.bias
         return hidden_states
 
 
