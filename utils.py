@@ -2,6 +2,7 @@ import array
 import collections
 import json
 import logging
+from multiprocessing import Pool
 import os
 import random
 import time
@@ -448,7 +449,6 @@ def load_and_cache_examples_fast(
 
         logger.info("Staring processing")
         b = time.time()
-        from multiprocessing import Pool
         with Pool() as p:
             features = p.starmap(_fast_process_one, [(i, tokenizer) for i in examples])
 
