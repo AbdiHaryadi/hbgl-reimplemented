@@ -333,54 +333,20 @@ class BertOutput(nn.Module):
         return hidden_states
 
 
-class TransformerFFN(nn.Module):
-    def __init__(self, config):
-        super(TransformerFFN, self).__init__()
-        self.ffn_type = config.ffn_type
-        assert self.ffn_type in (1, 2)
-        if self.ffn_type in (1, 2):
-            self.wx0 = nn.Linear(config.hidden_size, config.hidden_size)
-        if self.ffn_type in (2,):
-            self.wx1 = nn.Linear(config.hidden_size, config.hidden_size)
-        if self.ffn_type in (1, 2):
-            self.output = nn.Linear(config.hidden_size, config.hidden_size)
-        self.LayerNorm = BertLayerNorm(config.hidden_size, eps=1e-5)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-    def forward(self, x):
-        if self.ffn_type in (1, 2):
-            x0 = self.wx0(x)
-            if self.ffn_type == 1:
-                x1 = x
-            elif self.ffn_type == 2:
-                x1 = self.wx1(x)
-            out = self.output(x0 * x1)
-        out = self.dropout(out)
-        out = self.LayerNorm(out + x)
-        return out
-
-
 class BertLayer(nn.Module):
     def __init__(self, config):
         super(BertLayer, self).__init__()
         self.attention = BertAttention(config)
-        self.ffn_type = config.ffn_type
-        if self.ffn_type:
-            self.ffn = TransformerFFN(config)
-        else:
-            self.intermediate = BertIntermediate(config)
-            self.output = BertOutput(config)
+        self.intermediate = BertIntermediate(config)
+        self.output = BertOutput(config)
 
     def forward(self, hidden_states, attention_mask, history_states=None,
                 mask_qkv=None, seg_ids=None, key_history=None, value_history=None, rel_pos=None):
         attention_output = self.attention(
             hidden_states, attention_mask, history_states=history_states,
             mask_qkv=mask_qkv, seg_ids=seg_ids, key_history=key_history, value_history=value_history, rel_pos=rel_pos)
-        if self.ffn_type:
-            layer_output = self.ffn(attention_output)
-        else:
-            intermediate_output = self.intermediate(attention_output)
-            layer_output = self.output(intermediate_output, attention_output)
+        intermediate_output = self.intermediate(attention_output)
+        layer_output = self.output(intermediate_output, attention_output)
         return layer_output
 
 
