@@ -84,8 +84,6 @@ def main(flags=None):
                             "than this will be padded.")
 
     # decoding parameters
-    parser.add_argument('--fp16', action='store_true',
-                        help="Whether to use 16-bit float precision instead of 32-bit")
     parser.add_argument('--no_cuda', action='store_true',
                         help="Whether to use CUDA for decoding")
     parser.add_argument("--input_file", type=str, help="Input file")
@@ -216,7 +214,7 @@ def main(flags=None):
             length_penalty=args.length_penalty, eos_id=eos_word_ids, sos_id=sos_word_id,
             forbid_duplicate_ngrams=args.forbid_duplicate_ngrams, forbid_ignore_set=forbid_ignore_set,
             ngram_size=args.ngram_size, min_len=args.min_len, mode=args.mode,
-            max_position_embeddings=args.max_seq_length, pos_shift=args.pos_shift,
+            pos_shift=args.pos_shift,
         )
 
         if args.softmax_label_only and args.add_vocab_file:
@@ -231,8 +229,6 @@ def main(flags=None):
             if args.soft_label_hier_real_with_train_file:
                 prepare_hier_labels(args, tokenizer, model)
 
-        if args.fp16:
-            model.half()
         model.to(device)  # type: ignore
         if n_gpu > 1:
             model = torch.nn.DataParallel(model)
