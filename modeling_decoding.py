@@ -373,19 +373,13 @@ class BertLMPredictionHead(nn.Module):
 
         # The output weights are the same as the input embeddings, but there is
         # an output-only bias for each token.
-        self.decoder = nn.Linear(bert_model_embedding_weights.size(1),
-                                 bert_model_embedding_weights.size(0),
-                                 bias=False)
-        self.decoder.weight = bert_model_embedding_weights
+        self.decoder_weight = bert_model_embedding_weights
         self.bias = nn.Parameter(torch.zeros(
             bert_model_embedding_weights.size(0)))
-        self.converted = False
 
     def forward(self, hidden_states, task_idx=None):
-        if not self.converted:
-            self.converted = True
         hidden_states = self.transform(hidden_states)
-        hidden_states = self.decoder(hidden_states) + self.bias
+        hidden_states = F.linear(hidden_states, weight=self.decoder_weight, bias=self.bias)
         return hidden_states
 
 
@@ -687,8 +681,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                  pos_shift=False):
         super(BertForSeq2SeqDecoder, self).__init__(config)
         self.bert = BertModelIncr(config)
-        self.cls = BertPreTrainingHeads(
-            config, self.bert.embeddings.word_embeddings.weight, num_labels=num_labels)
+        self.cls = BertOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
         self.crit_mask_lm = nn.CrossEntropyLoss(reduction='none')
         self.crit_next_sent = nn.CrossEntropyLoss(ignore_index=-1)
         self.mask_word_id = mask_word_id
@@ -801,7 +794,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 if self.soft_label_hier_real and self.hier_labels is not None:
                     curr_hier = len(output_ids)
                     hl = self.hier_labels[curr_hier]
-                    prediction_scores, _ = self.cls(last_hidden, None, task_idx=task_idx)
+                    prediction_scores = self.cls(last_hidden)
 
                     prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
                                                 prediction_scores[:, :, hl]], dim=-1)
@@ -824,7 +817,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                     max_ids = None
                 else:
                     lsi = self.label_start_index
-                    prediction_scores, _ = self.cls(last_hidden, None, task_idx=task_idx)
+                    prediction_scores = self.cls(last_hidden)
 
                     prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
                                                 prediction_scores[:, :, lsi:]], dim=-1)
@@ -847,8 +840,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                     max_ids = None
             elif self.label_start_index > 0:
                 lsi = self.label_start_index
-                prediction_scores, _ = self.cls(
-                    last_hidden, None, task_idx=task_idx)
+                prediction_scores = self.cls(last_hidden)
 
                 prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
                                                prediction_scores[:, :, lsi:]], dim=-1)
@@ -862,12 +854,12 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 if len(output_ids) > 0:
                     last_output_ids = output_ids[-1]
                     hidden_states = self.cls.predictions.transform(last_hidden)
-                    prediction_scores = F.linear(hidden_states, weight=self.cls.predictions.decoder.weight, bias=self.cls.predictions.bias)
-                    b_token_embs = self.cls.predictions.decoder.weight[self.ab_bound_token_id:, ]
+                    prediction_scores = F.linear(hidden_states, weight=self.cls.predictions.decoder_weight, bias=self.cls.predictions.bias)
+                    b_token_embs = self.cls.predictions.decoder_weight[self.ab_bound_token_id:, ]
 
                     for i, label_id in enumerate(last_output_ids.view(-1).tolist()):
                         if label_id < self.ab_bound_token_id:
-                            new_b_token_embs = b_token_embs + self.cls.predictions.decoder.weight[label_id]
+                            new_b_token_embs = b_token_embs + self.cls.predictions.decoder_weight[label_id]
                             new_b_scores = F.linear(hidden_states[i], weight=new_b_token_embs,
                                                     bias=self.cls.predictions.bias[self.ab_bound_token_id:])
                             prediction_scores[i, :,   self.ab_bound_token_id:] = new_b_scores
@@ -875,13 +867,11 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                     _, max_ids = torch.max(prediction_scores, dim=-1)
                     output_ids.append(max_ids)
                 else:
-                    prediction_scores, _ = self.cls(
-                        last_hidden, None, task_idx=task_idx)
+                    prediction_scores = self.cls(last_hidden)
                     _, max_ids = torch.max(prediction_scores, dim=-1)
                     output_ids.append(max_ids)
             else:
-                prediction_scores, _ = self.cls(
-                    last_hidden, None, task_idx=task_idx)
+                prediction_scores = self.cls(last_hidden)
                 _, max_ids = torch.max(prediction_scores, dim=-1)
                 output_ids.append(max_ids)
 
@@ -991,8 +981,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                           prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos)
 
             last_hidden = new_encoded_layers[-1][:, -1:, :]
-            prediction_scores, _ = self.cls(
-                last_hidden, None, task_idx=task_idx)
+            prediction_scores = self.cls(last_hidden)
             log_scores = torch.nn.functional.log_softmax(
                 prediction_scores, dim=-1)
             

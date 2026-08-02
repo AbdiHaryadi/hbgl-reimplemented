@@ -1,4 +1,5 @@
 from collections import defaultdict
+import pickle
 
 from torch.optim import AdamW
 from transformers import BertConfig, BertTokenizer
@@ -174,7 +175,6 @@ def get_model_and_tokenizer(args):
         cache_dir=args.cache_dir if args.cache_dir else None)
 
     if args.add_vocab_file:
-        import pickle
         with open(args.add_vocab_file, 'rb') as f:
             label_map = pickle.load(f)
         label_tokens_start_index  = model.bert.embeddings.word_embeddings.num_embeddings
@@ -235,8 +235,6 @@ def get_model_and_tokenizer(args):
             init_label_emb = (label_mask.unsqueeze(-1) * init_label_emb).sum(1)
         label_tokens = [i for i in range(len(label_map))]
         tokenizer.add_tokens([label_map[label].lower() for label in labels_key])
-        #import pdb;pdb.set_trace()
-        #labels_embeds = torch.nn.Embedding(len(label_tokens), config.hidden_size).weight.data
         if args.label_cpt:
             # for compare with same seed
             rng_state = torch.get_rng_state()
@@ -292,7 +290,7 @@ def get_model_and_tokenizer(args):
             torch.set_rng_state(rng_state)
         elif args.random_label_init:
             rng_state = torch.get_rng_state()
-            init_label_emb = torch.nn.Embedding(len(label_tokens), config.hidden_size).weight.data
+            init_label_emb = torch.nn.Embedding(len(label_tokens), model.config.hidden_size).weight.data
             torch.set_rng_state(rng_state)
 
         model.bert.embeddings.word_embeddings.weight.data = torch.cat([model.bert.embeddings.word_embeddings.weight.data, init_label_emb], dim=0)
@@ -300,12 +298,12 @@ def get_model_and_tokenizer(args):
         model.cls.predictions.decoder_weight.data = torch.cat([model.cls.predictions.decoder_weight.data, init_label_emb], dim=0)
         model.cls.predictions.bias.data =  torch.cat([model.cls.predictions.bias.data, torch.zeros(len(label_tokens))],
                                                         dim=0)
-        vs = config.vocab_size
-        config.vocab_size = config.vocab_size + len(label_tokens)
+        vs = model.config.vocab_size
+        model.config.vocab_size = model.config.vocab_size + len(label_tokens)
         if args.softmax_label_only:
             set_label_start_index_in_model(model, label_tokens_start_index)
     else:
-        vs = config.vocab_size
+        vs = model.config.vocab_size
 
     if args.soft_label:
         set_model_for_soft_label(model, tokenizer, vs)
