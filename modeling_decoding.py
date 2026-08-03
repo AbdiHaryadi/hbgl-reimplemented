@@ -717,7 +717,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         output_shape = list(token_type_ids.size())
         output_length = output_shape[1]
 
-        output_ids = []
+        output_ids: list[torch.Tensor] = []
         prev_embedding = None
         prev_encoded_layers = None
         curr_ids = input_ids
@@ -801,14 +801,15 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
                     prediction_scores = torch.sigmoid(prediction_scores) > 0.5
 
-                    _pred_ids = []
+                    _pred_ids: list[torch.Tensor] = []
                     for i in range(prediction_scores.shape[0]):
-                        pred_ids = torch.arange(prediction_scores.shape[-1])[prediction_scores[i, -1]]
+                        device = prediction_scores.device
+                        pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
                         sep_mask = pred_ids == 0
                         pred_ids[sep_mask] = self.eos_id
-                        pred_ids[~sep_mask] = torch.arange(hl.shape[-1])[hl][pred_ids[~sep_mask] - 1]
+                        pred_ids[~sep_mask] = torch.arange(hl.shape[-1], device=device)[hl][pred_ids[~sep_mask] - 1]
                         _pred_ids.append(pred_ids)
-                    pred_ids = _pred_ids
+                    pred_ids = torch.stack(_pred_ids)
                     output_ids.append(pred_ids)
 
                     pred_embeds =  prediction_scores.float() @ torch.cat(
@@ -824,14 +825,15 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
                     prediction_scores = torch.sigmoid(prediction_scores) > 0.5
 
-                    _pred_ids = []
+                    _pred_ids: list[torch.Tensor] = []
                     for i in range(prediction_scores.shape[0]):
-                        pred_ids = torch.arange(prediction_scores.shape[-1])[prediction_scores[i, -1]]
+                        device = prediction_scores.device
+                        pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
                         sep_mask = pred_ids == 0
                         pred_ids[sep_mask] = self.eos_id
                         pred_ids[~sep_mask] += lsi - 1
                         _pred_ids.append(pred_ids)
-                    pred_ids = _pred_ids
+                    pred_ids = torch.stack(_pred_ids)
                     output_ids.append(pred_ids)
 
                     pred_embeds =  prediction_scores.float() @ torch.cat(
@@ -902,6 +904,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             next_pos += 1
 
         if self.soft_label:
+            device = output_ids[0].device
             _output_ids: list = [[] for _ in output_ids[0]]
             max_l = 0
             for i, oi in enumerate(_output_ids):
@@ -914,7 +917,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 max_l = max(len(_output_ids[i]), max_l)
 
             for i, oi in enumerate(_output_ids):
-                _output_ids[i] = torch.LongTensor(oi + [0] * (max_l - len(oi))).unsqueeze(0)
+                _output_ids[i] = torch.LongTensor(oi + [0] * (max_l - len(oi)), device=device).unsqueeze(0)
             output_ids = _output_ids
             return torch.cat(output_ids, dim=0)
         else:
