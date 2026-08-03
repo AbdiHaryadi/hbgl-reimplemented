@@ -227,7 +227,7 @@ def get_model_and_tokenizer(args):
             else:
                 label_name_tensors.append(tokenizer.encode(lk, add_special_tokens=False))
             max_l = max(len(label_name_tensors[-1]), max_l)
-        label_name_tensors = torch.LongTensor([i + [tokenizer.pad_token_id] * (max_l - len(i)) for i in label_name_tensors])
+        label_name_tensors = torch.tensor([i + [tokenizer.pad_token_id] * (max_l - len(i)) for i in label_name_tensors], dtype=torch.long)
 
         with torch.no_grad():
             init_label_emb = model.bert.embeddings.word_embeddings(label_name_tensors)
@@ -279,9 +279,9 @@ def get_model_and_tokenizer(args):
                     reversed_hiers[_label_map_f(hj) + 1] = _label_map_f(hi) + 1
                     if args.label_cpt_use_bce:
                         attention_mask[_label_map_f(hj) + 1][_label_map_f(hi) + 1] = 1
-            input_ids = torch.LongTensor(tokenizer.encode(' '.join(label_map.values()).lower()))
+            input_ids = torch.tensor(tokenizer.encode(' '.join(label_map.values()).lower()), dtype=torch.long)
             assert len(input_ids) == len(labels_key) + 2
-            position_ids = torch.LongTensor([0, ] + [label_class[i] for i in labels_key] + [max(label_class.values()) + 1,])
+            position_ids = torch.tensor([0, ] + [label_class[i] for i in labels_key] + [max(label_class.values()) + 1,], dtype=torch.long)
 
             init_label_emb = training_cpt(args, tokenizer, input_ids, attention_mask,
                                             position_ids, init_label_emb, num_hiers, reversed_hiers).detach().cpu()

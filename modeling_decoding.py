@@ -918,7 +918,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 max_l = max(len(_output_ids[i]), max_l)
 
             for i, oi in enumerate(_output_ids):
-                _output_ids[i] = torch.LongTensor(oi + [0] * (max_l - len(oi)), device=device).unsqueeze(0)
+                _output_ids[i] = torch.tensor(oi + [0] * (max_l - len(oi)), dtype=torch.long, device=device).unsqueeze(0)
             output_ids = _output_ids
             return torch.cat(output_ids, dim=0)
         else:
