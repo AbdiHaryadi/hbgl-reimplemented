@@ -171,8 +171,6 @@ def main(flags=None):
         tokenizer.add_tokens([label_map[label] for label in labels_key])
         add_token_num = len(labels_key)
 
-    vocab = tokenizer.vocab
-
     if hasattr(tokenizer, 'model_max_length'):
         tokenizer.model_max_length = args.max_seq_length
     elif hasattr(tokenizer, 'max_len'):
@@ -203,7 +201,7 @@ def main(flags=None):
 
         bi_uni_pipeline = []
         bi_uni_pipeline.append(seq2seq_loader.Preprocess4Seq2seqDecoder(
-            list(vocab.keys()), tokenizer.convert_tokens_to_ids, args.max_seq_length,
+            tokenizer_vocab_words(tokenizer), tokenizer.convert_tokens_to_ids, args.max_seq_length,
             max_tgt_length=args.max_tgt_length, pos_shift=args.pos_shift,
             source_type_id=config.source_type_id, target_type_id=config.target_type_id,
             cls_token=tokenizer.cls_token, sep_token=tokenizer.sep_token, pad_token=tokenizer.pad_token))
@@ -339,6 +337,13 @@ def main(flags=None):
 
     if not found_checkpoint_flag:
         logger.info("Not found the model checkpoint file!")
+
+def tokenizer_vocab_words(tokenizer):
+    max_id = max(tokenizer.vocab.values())
+    vocab_words = [f"[unused{id}]" for id in range(max_id + 1)]
+    for token, id in tokenizer.vocab.items():
+        vocab_words[id] = token
+    return vocab_words
 
 def prepare_hier_labels(args, tokenizer, model):
     hier_labels = None
