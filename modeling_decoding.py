@@ -733,8 +733,9 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         else:
             rel_pos = None
 
+        pred_embeds = None
         while next_pos < output_length:
-            if self.soft_label and curr_ids is None:
+            if self.soft_label and curr_ids is None and pred_embeds is not None:
                 # set curr_ids to None in two more loops
                 curr_length = pred_embeds.size()[1]
                 if self.pos_shift:
