@@ -1,13 +1,51 @@
 from collections import defaultdict
+from dataclasses import dataclass
 
 import torch
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.optim import AdamW
 from transformers import BertForMaskedLM
 
+@dataclass
+class TrainingArguments:
+    model_name_or_path: str | None = None
+    max_source_seq_length: int = 464
+    max_target_seq_length: int = 48
+    adam_epsilon: float = 1e-8
+
+    learning_rate: float = 1e-3
+    max_steps: int = 500
+    batch_size: int = 32
+    increased_mask_ratio: bool = True
+    use_bce: bool = False
+    decode_with_pos: bool = False
+
+    @classmethod
+    def from_args(cls, args):
+        return cls(
+            model_name_or_path=args.model_name_or_path,
+            max_source_seq_length=args.max_source_seq_length,
+            max_target_seq_length=args.max_target_seq_length,
+            adam_epsilon=args.adam_epsilon,
+            learning_rate=args.label_cpt_lr,
+            max_steps=args.label_cpt_steps,
+            batch_size=args.label_cpt_bsz,
+            increased_mask_ratio=not args.label_cpt_not_incr_mask_ratio,
+            use_bce=args.label_cpt_use_bce,
+            decode_with_pos=args.label_cpt_decodewithpos,
+        )
 
 class Trainer:
-    def __init__(self, args, tokenizer, input_ids, attention_mask,  position_ids, num_hiers, reversed_hiers):
+    def __init__(
+            self,
+            args: TrainingArguments,
+            tokenizer,
+            input_ids,
+            attention_mask,
+            position_ids,
+            num_hiers,
+            reversed_hiers
+    ):
         self.args = args
         self.tokenizer = tokenizer
         self.input_ids = input_ids
@@ -22,7 +60,7 @@ class Trainer:
         torch.save(label_embeddings.cpu(), 'before.pt')
     
         optimizer = self.init_optimizer(label_embeddings)
-        for step in range(self.get_total_steps()):
+        for step in range(self.args.max_steps):
             current_mask_ratio = self.calculate_current_mask_ratio(step)
             masked_inputs_embeds, mask_tokens = self.generate_masked_input_embeds(model, label_embeddings, current_mask_ratio)
             prediction_scores = self.calculate_predictions_scores(model, label_embeddings, masked_inputs_embeds)
@@ -43,19 +81,16 @@ class Trainer:
     def init_optimizer(self, label_embeddings):
         return AdamW(
             params=[{'params': [label_embeddings], 'weight_decay': 0.0}],
-            lr=self.args.label_cpt_lr,
+            lr=self.args.learning_rate,
             eps=self.args.adam_epsilon
         )
 
-    def get_total_steps(self):
-        return self.args.label_cpt_steps
-
     def calculate_current_mask_ratio(self, step):
         mask_ratio = 0.15
-        if self.args.label_cpt_not_incr_mask_ratio:
-            return mask_ratio
+        if self.args.increased_mask_ratio:
+            return mask_ratio + (step / self.args.increased_mask_ratio) * 0.3
         else:
-            return mask_ratio + (step / self.args.label_cpt_steps) * 0.3
+            return mask_ratio
 
     def calculate_predictions_scores(self, model, label_embeddings, masked_inputs_embeds):
         batched_position_ids = self.get_batched_position_ids()
@@ -71,21 +106,18 @@ class Trainer:
         prediction_scores = hidden_states @ label_embeddings.T
         return prediction_scores
 
-    def get_batch_size(self):
-        return self.args.label_cpt_bsz
-
     def get_batched_input_ids(self):
-        return self.input_ids.unsqueeze(0).repeat(self.get_batch_size(), 1).cuda().long()
+        return self.input_ids.unsqueeze(0).repeat(self.args.batch_size, 1).cuda().long()
 
     def get_batched_attention_mask(self):
-        batched_attention_mask = self.attention_mask.unsqueeze(0).repeat(self.get_batch_size(), 1, 1).unsqueeze(1).cuda()
+        batched_attention_mask = self.attention_mask.unsqueeze(0).repeat(self.args.batch_size, 1, 1).unsqueeze(1).cuda()
         batched_attention_mask = (1.0 - batched_attention_mask) * -10000.0
         return batched_attention_mask
 
     def get_batched_position_ids(self):
-        batched_position_ids = self.position_ids.unsqueeze(0).repeat(self.get_batch_size(), 1).cuda().long()
+        batched_position_ids = self.position_ids.unsqueeze(0).repeat(self.args.batch_size, 1).cuda().long()
 
-        if self.args.label_cpt_decodewithpos:
+        if self.args.decode_with_pos:
             batched_position_ids[:, 1:-1] += self.args.max_source_seq_length - 1
             batched_position_ids[:, -1] = self.args.max_source_seq_length + self.args.max_target_seq_length - 1
         return batched_position_ids
@@ -95,7 +127,7 @@ class Trainer:
         masked_inputs_embeds = torch.cat([model.bert.embeddings.word_embeddings.weight[self.tokenizer.cls_token_id].unsqueeze(0),
                                         label_embeddings,
                                         model.bert.embeddings.word_embeddings.weight[self.tokenizer.sep_token_id].unsqueeze(0),])
-        masked_inputs_embeds = masked_inputs_embeds.unsqueeze(0).repeat(self.get_batch_size(), 1, 1).cuda()
+        masked_inputs_embeds = masked_inputs_embeds.unsqueeze(0).repeat(self.args.batch_size, 1, 1).cuda()
         masked_inputs_embeds[mask_tokens] = model.bert.embeddings.word_embeddings.weight[self.tokenizer.mask_token_id]
         return masked_inputs_embeds, mask_tokens
 
@@ -116,12 +148,12 @@ class Trainer:
         return labels
 
     def calculate_masked_lm_loss(self, mask_tokens, prediction_scores, labels):
-        if self.args.label_cpt_use_bce:
+        if self.args.use_bce:
             loss_fct = BCEWithLogitsLoss()  # -100 index = padding token
             with torch.no_grad():
                 bce_labels = torch.zeros_like(prediction_scores)
                 _bce_labels = []
-                for b in range(self.args.label_cpt_bsz):
+                for b in range(self.args.batch_size):
                     l = labels[b][mask_tokens[b]].tolist()
                     bce_l = bce_labels[b][mask_tokens[b]]
                     c = defaultdict(list)
@@ -158,7 +190,7 @@ class Trainer:
 
 def train(args, tokenizer, input_ids, attention_mask,  position_ids, initial_label_embeddings, num_hiers, reversed_hiers):
     return Trainer(
-        args,
+        TrainingArguments.from_args(args),
         tokenizer,
         input_ids,
         attention_mask,
