@@ -1,3 +1,4 @@
+from collections import defaultdict
 import logging
 import pickle
 
@@ -93,7 +94,6 @@ def get_model_and_tokenizer(args):
 
         for lk in labels_key:
             if args.one_by_one_label_init_map:
-                from collections import defaultdict
                 hiera = defaultdict(set)
                 _label_dict = {}
                 with open(args.one_by_one_label_init_map) as f:
@@ -143,18 +143,7 @@ def get_model_and_tokenizer(args):
             # for compare with same seed
             rng_state = torch.get_rng_state()
 
-            from collections import defaultdict
-            hiera = defaultdict(set)
-            _label_dict = {}
-            with open(args.label_cpt) as f:
-                _label_dict['Root'] = -1
-                for line in f.readlines():
-                    line = line.strip().split('\t')
-                    for i in line[1:]:
-                        if i not in _label_dict:
-                            _label_dict[i] = len(_label_dict) - 1
-                        hiera[line[0]].add(i)
-                _label_dict.pop('Root')
+            hiera, _label_dict = load_hierarchy_and_label_dict(args.label_cpt)
             r_hiera = {}
             for i in hiera:
                 for j in list(hiera[i]):
@@ -213,6 +202,20 @@ def get_model_and_tokenizer(args):
         set_model_for_soft_label(model, tokenizer, vs)
 
     return model, tokenizer, vs
+
+def load_hierarchy_and_label_dict(hierarchy_path):
+    hiera = defaultdict(set)
+    _label_dict = {}
+    with open(hierarchy_path) as f:
+        _label_dict['Root'] = -1
+        for line in f.readlines():
+            line = line.strip().split('\t')
+            for token in line[1:]:
+                if token not in _label_dict:
+                    _label_dict[token] = len(_label_dict) - 1
+                hiera[line[0]].add(token)
+        _label_dict.pop('Root')
+    return hiera,_label_dict
 
 def set_label_start_index_in_model(model, label_tokens_start_index):
     model.label_start_index = label_tokens_start_index
