@@ -251,6 +251,10 @@ def create_mask_and_position_ids(num_tokens, max_len, offset=None):
 
 class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
     MODEL_NAME = 'basic class'
+    soft_label: bool = False
+    mask_token_id: int = -1
+    sep_token_id: int = -1
+    vs: int = -1
 
     def __init__(self, config):
         super(BertForSequenceToSequence, self).__init__(config)
@@ -279,7 +283,6 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
     label_start_index = -1
     ab_bound_token_id = -1
     MODEL_NAME = "BertForSequenceToSequenceWithPseudoMask"
-    soft_label = False
     soft_label_hier_real = False
 
     @staticmethod

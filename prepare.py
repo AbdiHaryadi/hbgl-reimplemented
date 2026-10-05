@@ -6,8 +6,9 @@ from transformers import BertConfig, BertTokenizer, RobertaConfig
 
 from args import HBGLTrainingArguments
 from hierarchy import LabelHierarchy
-from modeling import BertForSequenceToSequenceUniLMV1, BertForSequenceToSequenceWithPseudoMask
 import ghle
+from modeling_v2 import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
+from utils import id_to_label_token
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,10 @@ def get_model_and_tokenizer(args: HBGLTrainingArguments):
         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
         do_lower_case=args.do_lower_case, cache_dir=args.cache_dir if args.cache_dir else None)
 
-    model_class = \
-        BertForSequenceToSequenceWithPseudoMask if args.mask_way == 'v2' \
-            else BertForSequenceToSequenceUniLMV1
+    assert args.mask_way == "v2", "I don't implement BertForSequenceToSequenceUniLMV1 yet, so ... nope."
+    logger.info("Construct model %s" % BertForSequenceToSequenceWithPseudoMask.MODEL_NAME)
 
-    logger.info("Construct model %s" % model_class.MODEL_NAME)
-
-    model = model_class.from_pretrained(
+    model: BertForSequenceToSequence = BertForSequenceToSequenceWithPseudoMask.from_pretrained(
         args.model_name_or_path, config=config,
         reuse_position_embedding=True,
         cache_dir=args.cache_dir if args.cache_dir else None)
@@ -142,7 +140,6 @@ def get_model_and_tokenizer(args: HBGLTrainingArguments):
             assert len(input_ids) == len(labels_key) + 2
             position_ids = torch.tensor([0, ] + [label_depth[i] for i in labels_key] + [max(label_depth.values()) + 1,], dtype=torch.long)
 
-            # Selanjutnya validasi ini. :)
             init_label_emb = ghle.ghle_train(args, tokenizer, input_ids, attention_mask,
                                             position_ids, init_label_emb, hiera).detach().cpu()
 
@@ -154,29 +151,20 @@ def get_model_and_tokenizer(args: HBGLTrainingArguments):
 
         model.bert.embeddings.word_embeddings.weight.data = torch.cat([model.bert.embeddings.word_embeddings.weight.data, init_label_emb], dim=0)
         model.bert.embeddings.word_embeddings.num_embeddings += len(label_to_id_map)
-        model.cls.predictions.decoder_weight.data = torch.cat([model.cls.predictions.decoder_weight.data, init_label_emb], dim=0)
+        model.cls.predictions.decoder.weight.data = torch.cat([model.cls.predictions.decoder.weight.data, init_label_emb], dim=0)
         model.cls.predictions.bias.data =  torch.cat([model.cls.predictions.bias.data, torch.zeros(len(label_to_id_map))],
                                                         dim=0)
         old_vocab_size = model.config.vocab_size
         model.config.vocab_size = model.config.vocab_size + len(label_to_id_map)
-        if args.softmax_label_only:
-            set_label_start_index_in_model(model, label_tokens_start_index)
     else:
         old_vocab_size = model.config.vocab_size
 
     if args.soft_label:
-        set_model_for_soft_label(model, tokenizer, old_vocab_size)
+        assert isinstance(tokenizer.mask_token_id, int)
+        assert isinstance(tokenizer.sep_token_id, int)
+        model.soft_label = True
+        model.mask_token_id = tokenizer.mask_token_id
+        model.sep_token_id = tokenizer.sep_token_id
+        model.vs = old_vocab_size
 
     return model, tokenizer, old_vocab_size
-
-def set_label_start_index_in_model(model, label_tokens_start_index):
-    model.label_start_index = label_tokens_start_index
-
-def set_model_for_soft_label(model, tokenizer, vs):
-    model.soft_label = True
-    model.mask_token_id = tokenizer.mask_token_id
-    model.sep_token_id = tokenizer.sep_token_id
-    model.vs = vs
-
-def id_to_label_token(id_: int):
-    return f"[A_{id_}]"

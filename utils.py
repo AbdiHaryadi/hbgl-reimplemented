@@ -1,5 +1,5 @@
 import array
-import collections
+from collections import defaultdict
 import json
 import logging
 from multiprocessing import Pool
@@ -15,9 +15,10 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 class TrainingExample(object):
-    def __init__(self, source_ids, target_ids, example_id):
+    def __init__(self, source_ids: list[int], target_ids: list[list[int]], example_id):
         self.source_ids = source_ids
         self.target_ids = target_ids
+        self.example_id = example_id
 
 class Seq2seqDatasetForBert(torch.utils.data.Dataset):
     def __init__(
@@ -99,7 +100,7 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         target_ids = target_ids[:sep_token_id+1]
 
         num_source_tokens = len(source_ids)
-        num_target_tokens = target_ids.shape[0]
+        num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
 
 
         if self.source_mask_prob > 0:
@@ -113,38 +114,45 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         source_ids = self.__pad(source_ids, self.max_source_len)
         # target_ids = self.__pad(target_ids, self.max_target_len)
 
-        if self.mask_way == 'v2':
-            pseudo_ids = []
-            label_ids = []
-            for pos in range(num_target_tokens):
-                tk_id = target_ids[pos]
-                masked_tk_id = self.get_masked_token(tk_id)
-                assert  type(masked_tk_id) is int
-                pseudo_ids.append(masked_tk_id)
-                label_ids.append(tk_id.clone())
-                r = random.random()
-                if r < self.target_mask_prob:
-                    #target_ids[pos] = masked_tk_id
-                    target_ids[pos] = 0
-                    target_ids[pos][masked_tk_id] = 1
-            #label_ids = self.__pad(label_ids, self.max_target_len)
-            pseudo_ids = self.__pad(pseudo_ids, self.max_target_len)
+        target_ids, label_ids, pseudo_ids = self.unnamed_method(target_ids)
+        return (
+            source_ids,
+            target_ids,
+            label_ids,
+            pseudo_ids,
+            num_source_tokens,
+            num_target_tokens,
+        )
 
-            #target_ids = target_ids.tolist()
-            #label_ids = [i.tolist() for i in label_ids]
-            label_ids = torch.stack(label_ids, dim=0)
-            #for i in range(label_ids.shape[0]):
-                #print(torch.arange(label_ids.shape[-1])[label_ids[i].bool()].tolist(),
-                      #torch.arange(label_ids.shape[-1])[target_ids[i].bool()].tolist())
+    def get_num_target_tokens_by_target_ids(self, target_ids):
+        return target_ids.shape[0]
+
+    def unnamed_method(self, target_ids):
+        num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
+
+        pseudo_ids = []
+        label_ids = []
+        for pos in range(num_target_tokens):
+            tk_id = target_ids[pos]
+            masked_tk_id = self.get_masked_token(tk_id)
+            assert  type(masked_tk_id) is int
+            pseudo_ids.append(masked_tk_id)
+            label_ids.append(tk_id.clone())
+            r = random.random()
+            if r < self.target_mask_prob:
+                target_ids[pos] = 0
+                target_ids[pos][masked_tk_id] = 1
+        pseudo_ids = self.__pad(pseudo_ids, self.max_target_len)
+        label_ids = torch.stack(label_ids, dim=0)
 
 
-            p1d = (0, 0, 0, self.max_target_len - label_ids.shape[0])
-            label_ids = F.pad(label_ids, p1d, "constant", 0)  # effectively zero padding
+        p1d = (0, 0, 0, self.max_target_len - label_ids.shape[0])
+        label_ids = F.pad(label_ids, p1d, "constant", 0)  # effectively zero padding
 
-            p1d = (0, 0, 0, self.max_target_len - target_ids.shape[0])
-            target_ids = F.pad(target_ids, p1d, "constant", 0)  # effectively zero padding
+        p1d = (0, 0, 0, self.max_target_len - target_ids.shape[0])
+        target_ids = F.pad(target_ids, p1d, "constant", 0)  # effectively zero padding
 
-            return source_ids, target_ids, label_ids, pseudo_ids, num_source_tokens, num_target_tokens
+        return target_ids, label_ids, pseudo_ids
 
     def __getitem__(self, _idx):
         if self.soft_label:
@@ -351,34 +359,22 @@ def load_and_cache_examples(
                 examples.append(json.loads(line))
         features = []
 
-        slc = collections.defaultdict(int)
-        tlc = collections.defaultdict(int)
+        slc = defaultdict(int)
+        tlc = defaultdict(int)
 
         for example in tqdm(examples):
             if soft_label:
                 source_tokens = tokenizer.tokenize(example["src"])
-                #target_tokens = [] if eval_mode else [tokenizer.tokenize(i) for i in example["tgt"]]
                 source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
-
-                target_ids = [tokenizer.convert_tokens_to_ids([j.lower() for j in i]) for i in example['tgt']]
-
+                target_ids = [tokenizer.convert_tokens_to_ids([
+                    id_to_label_token(label).lower() for label in label_list_per_level
+                ]) for label_list_per_level in example['tgt']]
             else:
-                if isinstance(example["src"], list):
-                    source_tokens = example["src"]
-                    target_tokens = [] if eval_mode else example["tgt"]
-                else:
-                    source_tokens = tokenizer.tokenize(example["src"])
-                    target_tokens = [] if eval_mode else tokenizer.tokenize(example["tgt"])
-                source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
-                target_ids = tokenizer.convert_tokens_to_ids(target_tokens)
+                raise ValueError("For soft_label = False, I didn't support it for now.")
 
             slc[len(source_ids)] += 1
             tlc[len(target_ids)] += 1
 
-            # features.append({
-            #         "source_ids": source_ids,
-            #         "target_ids": target_ids,
-            #     })
             features.append(
                 TrainingExample(
                     source_ids=source_ids,
@@ -398,23 +394,7 @@ def load_and_cache_examples(
 
         if local_rank in [-1, 0] and cached_features_file is not None:
             if lmdb_cache:
-                db = lmdb.open(cached_features_file, readonly=False, map_async=True)
-                for idx, feature in enumerate(features):
-                    write_to_lmdb(
-                        db, b"src_ids_%d" % idx, 
-                        serialize_array(feature["source_ids"], dtype=lmdb_dtype))
-                    write_to_lmdb(
-                        db, b"tgt_ids_%d" % idx,
-                        serialize_array(feature["target_ids"], dtype=lmdb_dtype))
-                write_to_lmdb(db, b"__start__", serialize_str(0))
-                write_to_lmdb(db, b"__size__", serialize_str(len(features)))
-                write_to_lmdb(db, b"__dtype__", serialize_str(lmdb_dtype))
-                db.sync()
-                db.close()
-                logger.info("db_key_idx = %d" % len(features))
-                del features
-                features = cached_features_file
-                logger.info("Saving features into cached lmdb dir %s", cached_features_file)
+                raise NotImplementedError("Not support it yet.")
             else:
                 logger.info("Saving features into cached file %s", cached_features_file)
                 torch.save(features, cached_features_file)
@@ -476,3 +456,6 @@ def load_and_cache_examples_fast(
         torch.distributed.barrier()
 
     return features
+
+def id_to_label_token(id_: int):
+    return f"[A_{id_}]"

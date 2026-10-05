@@ -5,6 +5,7 @@ import random
 
 import numpy as np
 import torch
+from transformers import BertTokenizer
 import wandb
 
 from args import HBGLTrainingArguments, parse_to_training_arguments
@@ -111,15 +112,18 @@ def main():
         return
 
     init_wandb_if_active(args)
-    model, tokenizer, vs = prepare_model_and_tokenizer(args)
-    set_cached_train_features_file_if_empty(args)
-    set_hier_labels_if_soft_label(args, model, tokenizer)
-    training_features = prepare_training_features(args, tokenizer, vs)
+    model, tokenizer, old_vocab_size = prepare_model_and_tokenizer(args)
+    set_args_cached_train_features_file(args)
+    training_features = prepare_training_features(args, tokenizer, old_vocab_size)
     best_macro_f1_path, best_micro_f1_path = train(args, training_features, model, tokenizer)
     if args.test_file:
         test(args, best_macro_f1_path, best_micro_f1_path)
 
-def prepare_training_features(args, tokenizer, vs):
+def prepare_training_features(
+        args: HBGLTrainingArguments,
+        tokenizer: BertTokenizer,
+        old_vocab_size: int
+):
     training_features = load_and_cache_examples(
         example_file=args.train_file, tokenizer=tokenizer, local_rank=args.local_rank,
         cached_features_file=args.cached_train_features_file, shuffle=True,
@@ -128,11 +132,11 @@ def prepare_training_features(args, tokenizer, vs):
     )
 
     if args.add_vocab_file:
-        for i in training_features:
-            for j in i.target_ids:
+        for example in training_features:
+            for target_id_list in example.target_ids:
                 if args.soft_label:
-                    for ji in j:
-                        assert ji >= vs
+                    for target_id in target_id_list:
+                        assert target_id >= old_vocab_size
     return training_features
 
 def prepare_model_and_tokenizer(args: HBGLTrainingArguments):
@@ -140,40 +144,23 @@ def prepare_model_and_tokenizer(args: HBGLTrainingArguments):
         torch.distributed.barrier()
         # Make sure only the first process in distributed training will download model & vocab
     # Load pretrained model and tokenizer
-    model, tokenizer, vs = get_model_and_tokenizer(args)
+    model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
 
     if args.local_rank == 0:
         torch.distributed.barrier()
         # Make sure only the first process in distributed training will download model & vocab
 
-    return model,tokenizer,vs
+    return model,tokenizer,old_vocab_size
 
-def set_cached_train_features_file_if_empty(args):
+def set_args_cached_train_features_file(args: HBGLTrainingArguments):
     if args.cached_train_features_file is None:
         if not args.lmdb_cache:
             args.cached_train_features_file = os.path.join(args.output_dir, "cached_features_for_training.pt")
         else:
             args.cached_train_features_file = os.path.join(args.output_dir, "cached_features_for_training_lmdb")
 
-def set_hier_labels_if_soft_label(args, model, tokenizer):
     if args.soft_label:
         args.cached_train_features_file += 'soft_label'
-        if args.soft_label_hier_real:
-            hier_labels = None
-            for line in open(args.train_file):
-                if hier_labels:
-                    for i, l in enumerate(json.loads(line)['tgt']):
-                        hier_labels[i] |=  set(l)
-                else:
-                    hier_labels = [set(i) for i in json.loads(line)['tgt']]
-
-            if hier_labels is None:
-                raise ValueError("No hier_labels")
-
-            hier_labels = [tokenizer.convert_tokens_to_ids(list([j.lower() for j in i])) for i in hier_labels]
-
-            set_hier_labels_in_model(model, hier_labels)
-            model.soft_label_hier_real = args.soft_label_hier_real
 
 def init_wandb_if_active(args: HBGLTrainingArguments):
     if args.wandb:
