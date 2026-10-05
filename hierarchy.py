@@ -23,13 +23,13 @@ class LabelHierarchy:
     def get_num_hiers(self) -> dict[int, list[int]]:
         num_hiers = defaultdict(list)
         for parent, child in self.iter_hiera_parent_child_name_pairs():
-            num_hiers[self.label_to_id_map[parent] + 1].append(self.label_to_id_map[child] + 1)
+            num_hiers[self.get_label_id(parent) + 1].append(self.get_label_id(child) + 1)
         return num_hiers
 
     def get_reversed_num_hiers(self) -> dict[int, int]:
         reversed_num_hiers: dict[int, int] = {}
         for parent, child in self.iter_hiera_parent_child_name_pairs():
-            reversed_num_hiers[self.label_to_id_map[child] + 1] = self.label_to_id_map[parent] + 1
+            reversed_num_hiers[self.get_label_id(child) + 1] = self.get_label_id(parent) + 1
         return reversed_num_hiers
 
     def iter_hiera_parent_child_name_pairs(self):
