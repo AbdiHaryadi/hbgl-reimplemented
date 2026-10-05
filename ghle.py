@@ -56,9 +56,12 @@ class GHLETrainer:
         self.num_hiers = hierarchy.get_num_hiers()
         self.reversed_num_hiers = hierarchy.get_reversed_num_hiers()
 
+        # Actually, we don't get the device from GHLETrainingArguments, so we duplicate the method from args.py
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     def train(self, initial_label_embeddings: torch.Tensor):
         model = self.load_model_for_train()
-        label_embeddings = initial_label_embeddings.float().cuda().requires_grad_()
+        label_embeddings = initial_label_embeddings.float().to(self.device).requires_grad_()
         torch.save(label_embeddings.cpu(), 'before.pt')
     
         optimizer = self.init_optimizer(label_embeddings)
@@ -76,8 +79,8 @@ class GHLETrainer:
 
     def load_model_for_train(self):
         model = BertForMaskedLM.from_pretrained(self.args.model_name_or_path)
-        model = model.train()
-        model.cuda()  # type: ignore
+        model.train()
+        model.to(self.device)  # type: ignore
         return model
 
     def init_optimizer(self, label_embeddings):
@@ -90,7 +93,7 @@ class GHLETrainer:
     def calculate_current_mask_ratio(self, step):
         mask_ratio = 0.15
         if self.args.increased_mask_ratio:
-            return mask_ratio + (step / self.args.increased_mask_ratio) * 0.3
+            return mask_ratio + (step / self.args.max_steps) * 0.3
         else:
             return mask_ratio
 
@@ -109,15 +112,15 @@ class GHLETrainer:
         return prediction_scores
 
     def get_batched_input_ids(self):
-        return self.input_ids.unsqueeze(0).repeat(self.args.batch_size, 1).cuda().long()
+        return self.input_ids.unsqueeze(0).repeat(self.args.batch_size, 1).to(self.device).long()
 
     def get_batched_attention_mask(self):
-        batched_attention_mask = self.attention_mask.unsqueeze(0).repeat(self.args.batch_size, 1, 1).unsqueeze(1).cuda()
+        batched_attention_mask = self.attention_mask.unsqueeze(0).repeat(self.args.batch_size, 1, 1).unsqueeze(1).to(self.device)
         batched_attention_mask = (1.0 - batched_attention_mask) * -10000.0
         return batched_attention_mask
 
     def get_batched_position_ids(self):
-        batched_position_ids = self.position_ids.unsqueeze(0).repeat(self.args.batch_size, 1).cuda().long()
+        batched_position_ids = self.position_ids.unsqueeze(0).repeat(self.args.batch_size, 1).to(self.device).long()
 
         if self.args.decode_with_pos:
             batched_position_ids[:, 1:-1] += self.args.max_source_seq_length - 1
@@ -129,7 +132,7 @@ class GHLETrainer:
         masked_inputs_embeds = torch.cat([model.bert.embeddings.word_embeddings.weight[self.tokenizer.cls_token_id].unsqueeze(0),
                                         label_embeddings,
                                         model.bert.embeddings.word_embeddings.weight[self.tokenizer.sep_token_id].unsqueeze(0),])
-        masked_inputs_embeds = masked_inputs_embeds.unsqueeze(0).repeat(self.args.batch_size, 1, 1).cuda()
+        masked_inputs_embeds = masked_inputs_embeds.unsqueeze(0).repeat(self.args.batch_size, 1, 1).to(self.device)
         masked_inputs_embeds[mask_tokens] = model.bert.embeddings.word_embeddings.weight[self.tokenizer.mask_token_id]
         return masked_inputs_embeds, mask_tokens
 
