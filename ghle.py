@@ -4,10 +4,13 @@ from dataclasses import dataclass
 import torch
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.optim import AdamW
-from transformers import BertForMaskedLM
+from transformers import BertForMaskedLM, BertTokenizer
+
+from args import HBGLTrainingArguments
+from hierarchy import LabelHierarchy
 
 @dataclass
-class TrainingArguments:
+class GHLETrainingArguments:
     model_name_or_path: str | None = None
     max_source_seq_length: int = 464
     max_target_seq_length: int = 48
@@ -21,7 +24,7 @@ class TrainingArguments:
     decode_with_pos: bool = False
 
     @classmethod
-    def from_args(cls, args):
+    def from_args(cls, args: HBGLTrainingArguments):
         return cls(
             model_name_or_path=args.model_name_or_path,
             max_source_seq_length=args.max_source_seq_length,
@@ -35,26 +38,25 @@ class TrainingArguments:
             decode_with_pos=args.label_cpt_decodewithpos,
         )
 
-class Trainer:
+class GHLETrainer:
     def __init__(
             self,
-            args: TrainingArguments,
-            tokenizer,
-            input_ids,
-            attention_mask,
-            position_ids,
-            num_hiers,
-            reversed_hiers
+            args: GHLETrainingArguments,
+            tokenizer: BertTokenizer,
+            input_ids: torch.Tensor,
+            attention_mask: torch.Tensor,
+            position_ids: torch.Tensor,
+            hierarchy: LabelHierarchy,
     ):
         self.args = args
         self.tokenizer = tokenizer
         self.input_ids = input_ids
         self.attention_mask = attention_mask
         self.position_ids = position_ids
-        self.num_hiers = num_hiers
-        self.reversed_hiers = reversed_hiers
+        self.num_hiers = hierarchy.get_num_hiers()
+        self.reversed_num_hiers = hierarchy.get_reversed_num_hiers()
 
-    def train(self, initial_label_embeddings):
+    def train(self, initial_label_embeddings: torch.Tensor):
         model = self.load_model_for_train()
         label_embeddings = initial_label_embeddings.float().cuda().requires_grad_()
         torch.save(label_embeddings.cpu(), 'before.pt')
@@ -161,7 +163,7 @@ class Trainer:
                     for il in l:
                         if il not in self.num_hiers:
                                 # last labels
-                            p = self.reversed_hiers[il]
+                            p = self.reversed_num_hiers[il]
                             c[p].append(il)
                             lmap[il] = p
                     for i, il in enumerate(l):
@@ -188,13 +190,20 @@ class Trainer:
         model.zero_grad()
         label_embeddings.grad = None
 
-def train(args, tokenizer, input_ids, attention_mask,  position_ids, initial_label_embeddings, num_hiers, reversed_hiers):
-    return Trainer(
-        TrainingArguments.from_args(args),
+def ghle_train(
+        args: HBGLTrainingArguments,
+        tokenizer: BertTokenizer,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        position_ids: torch.Tensor,
+        initial_label_embeddings: torch.Tensor,
+        hierarchy: LabelHierarchy,
+):
+    return GHLETrainer(
+        GHLETrainingArguments.from_args(args),
         tokenizer,
         input_ids,
         attention_mask,
         position_ids,
-        num_hiers,
-        reversed_hiers
+        hierarchy,
     ).train(initial_label_embeddings)

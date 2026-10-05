@@ -1,5 +1,6 @@
 import glob
 import logging
+import math
 import os
 import shutil
 
@@ -10,6 +11,7 @@ from tqdm import tqdm
 from transformers import get_linear_schedule_with_warmup
 import wandb
 
+from args import HBGLTrainingArguments
 import test
 from utils import Seq2seqDatasetForBert, batch_list_to_batch_tensors
 
@@ -39,7 +41,7 @@ def get_checkpoint_state_dict(output_dir, ckpt):
     checkpoint_state_dict['model'] = model_state_dict
     return checkpoint_state_dict
 
-def prepare_for_training(args, model, checkpoint_state_dict):
+def prepare_for_training(args: HBGLTrainingArguments, model, checkpoint_state_dict):
     """
     https://github.com/kongds/HBGL/blob/master/run.py
 
@@ -71,7 +73,7 @@ def prepare_for_training(args, model, checkpoint_state_dict):
     return model, optimizer
 
 def train(
-        args,
+        args: HBGLTrainingArguments,
         training_features,
         model,
         tokenizer
@@ -86,7 +88,6 @@ def train(
     - args.fp16 (amp)
     """
     tb_writer = None
-    amp = None
 
     # model recover
     recover_step = get_max_epoch_model(args.output_dir)
@@ -104,7 +105,7 @@ def train(
     global_step = recover_step if recover_step else 0
 
     if args.num_training_steps == -1:
-        args.num_training_steps = args.num_training_epochs * len(training_features) / train_batch_size
+        args.num_training_steps = args.num_training_epochs * math.ceil(len(training_features) / train_batch_size)
 
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.num_warmup_steps,
@@ -172,7 +173,8 @@ def train(
                 inputs['target_ids'] = inputs['target_ids'].float()
 
             if args.label_cpt_decodewithpos:
-                model.target_offset = args.max_source_seq_length
+                logger.info(f"I have no idea why there's a model.target_offset here. ({args.max_source_seq_length})")
+                model.target_offset = args.max_source_seq_length  # type: ignore
                 inputs['target_no_offset'] = True
 
             loss = model(**inputs)

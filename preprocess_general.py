@@ -132,18 +132,19 @@ def get_hierarchy_from_list(data):
                 current_parent = label
     return label_hierarchy
 
-def make_label_to_id_map(data: list[dict]):
-    return {label: f'[A_{i}]' for i, label in enumerate(
+LabelToIdType = dict[str, int]
+def make_label_to_id_map(data: list[dict]) -> LabelToIdType:
+    return {label: i for i, label in enumerate(
         sorted(list(set(sum([sum([k for k in j['labels']], []) for j in data], []))))
     )}
 
-def label_to_tgt_list(label_to_id_map: dict[str, str], labels: list[list[str]]):
+def label_to_tgt_list(label_to_id_map: LabelToIdType, labels: list[list[str]]):
     max_depth = max(len(label_list) for label_list in labels)
     return [sorted(list(set([
         label_to_id_map[label_list[level_index]] for label_list in labels if level_index < len(label_list)
     ]))) for level_index in range(max_depth)]
 
-def transform_to_src_tgt(label_to_id_map: dict[str, str], data: list[dict]):
+def transform_to_src_tgt(label_to_id_map: LabelToIdType, data: list[dict]):
     return [
         {'src': l['text'], 'tgt': label_to_tgt_list(label_to_id_map, l['labels']) }
         for l in data
@@ -153,7 +154,7 @@ def transform_to_src_tgt(label_to_id_map: dict[str, str], data: list[dict]):
 class PreprocessorState:
     code_to_label_map: dict[tuple[int, str], str]
     hierarchy: dict[str, list[str]]
-    label_to_id_map: dict[str, str]
+    label_to_id_map: LabelToIdType
 
 class Preprocessor:
     def __init__(self, config: PreprocessorConfig):

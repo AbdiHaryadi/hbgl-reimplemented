@@ -127,6 +127,7 @@ class BertEmbeddings(nn.Module):
 
 class BertSelfAttention(nn.Module):
     def __init__(self, config):
+        # Compatible
         super(BertSelfAttention, self).__init__()
         if config.hidden_size % config.num_attention_heads != 0:
             raise ValueError(
@@ -145,11 +146,13 @@ class BertSelfAttention(nn.Module):
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x):
+        # Private
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
     def multi_head_attention(self, query, key, value, attention_mask, rel_pos):
+        # Private
         query_layer = self.transpose_for_scores(query)
         key_layer = self.transpose_for_scores(key)
         value_layer = self.transpose_for_scores(value)

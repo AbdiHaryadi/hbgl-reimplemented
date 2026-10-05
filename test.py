@@ -341,10 +341,8 @@ def get_args(flags=None):
 
     if flags:
         print(flags)
-        args = parser.parse_args(flags)
-    else:
-        args = parser.parse_args()
-    return args
+    
+    return parser.parse_args(flags)
 
 def tokenizer_vocab_words(tokenizer):
     max_id = max(tokenizer.vocab.values())
