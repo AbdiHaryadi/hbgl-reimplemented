@@ -157,17 +157,17 @@ def get_model_and_tokenizer(args: HBGLTrainingArguments):
         model.cls.predictions.decoder_weight.data = torch.cat([model.cls.predictions.decoder_weight.data, init_label_emb], dim=0)
         model.cls.predictions.bias.data =  torch.cat([model.cls.predictions.bias.data, torch.zeros(len(label_to_id_map))],
                                                         dim=0)
-        vs = model.config.vocab_size
+        old_vocab_size = model.config.vocab_size
         model.config.vocab_size = model.config.vocab_size + len(label_to_id_map)
         if args.softmax_label_only:
             set_label_start_index_in_model(model, label_tokens_start_index)
     else:
-        vs = model.config.vocab_size
+        old_vocab_size = model.config.vocab_size
 
     if args.soft_label:
-        set_model_for_soft_label(model, tokenizer, vs)
+        set_model_for_soft_label(model, tokenizer, old_vocab_size)
 
-    return model, tokenizer, vs
+    return model, tokenizer, old_vocab_size
 
 def set_label_start_index_in_model(model, label_tokens_start_index):
     model.label_start_index = label_tokens_start_index
