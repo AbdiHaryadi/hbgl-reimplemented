@@ -8,12 +8,13 @@ import torch
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, DistributedSampler, SequentialSampler
 from tqdm import tqdm
-from transformers import get_linear_schedule_with_warmup
+from transformers import BertTokenizer, get_linear_schedule_with_warmup
 import wandb
 
 from args import HBGLTrainingArguments
+from modeling_v2 import BertForSequenceToSequence
 import test
-from utils import Seq2seqDatasetForBert, batch_list_to_batch_tensors
+from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,11 @@ def get_checkpoint_state_dict(output_dir, ckpt):
     checkpoint_state_dict['model'] = model_state_dict
     return checkpoint_state_dict
 
-def prepare_for_training(args: HBGLTrainingArguments, model, checkpoint_state_dict):
+def prepare_for_training(
+        args: HBGLTrainingArguments,
+        model: BertForSequenceToSequence,
+        checkpoint_state_dict
+):
     """
     https://github.com/kongds/HBGL/blob/master/run.py
 
@@ -63,19 +68,23 @@ def prepare_for_training(args: HBGLTrainingArguments, model, checkpoint_state_di
 
     # multi-gpu training
     if args.n_gpu > 1:
-        model = torch.nn.DataParallel(model)
+        new_model = torch.nn.DataParallel(model)
+    else:
+        new_model = model
+
 
     # Distributed training
     if args.local_rank != -1:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+        new_model = torch.nn.parallel.DistributedDataParallel(
+            new_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+    # else: no change
 
-    return model, optimizer
+    return new_model, optimizer
 
 def train(
         args: HBGLTrainingArguments,
-        training_features,
-        model,
+        training_features: list[TrainingExample],
+        base_model: BertForSequenceToSequence,
         tokenizer
 ):
     """
@@ -87,7 +96,6 @@ def train(
     - tb_writer (involving SummaryWriter, idk what is it)
     - args.fp16 (amp)
     """
-    tb_writer = None
 
     # model recover
     recover_step = get_max_epoch_model(args.output_dir)
@@ -97,8 +105,8 @@ def train(
     else:
         checkpoint_state_dict = None
 
-    model.to(args.device)
-    model, optimizer = prepare_for_training(args, model, checkpoint_state_dict)
+    base_model.to(args.device)  # type: ignore
+    model, optimizer = prepare_for_training(args, base_model, checkpoint_state_dict)
 
     per_node_train_batch_size = args.per_gpu_train_batch_size * args.n_gpu * args.gradient_accumulation_steps
     train_batch_size = per_node_train_batch_size * (torch.distributed.get_world_size() if args.local_rank != -1 else 1)
@@ -114,7 +122,7 @@ def train(
     if checkpoint_state_dict:
         scheduler.load_state_dict(checkpoint_state_dict["lr_scheduler"])
 
-    train_dataset = create_train_dataset(args, training_features, model, tokenizer, train_batch_size, global_step)
+    train_dataset = create_train_dataset(args, training_features, model, tokenizer, train_batch_size, global_step)  # type: ignore
 
     # Train!
     logger.info("  ***** Running training *****  *")
@@ -144,7 +152,7 @@ def train(
         model.train()
         model.zero_grad()
 
-        tr_loss, logging_loss = 0.0, 0.0
+        logging_loss = 0.0
         best_macro_f1, best_micro_f1 = 0, 0
         best_macro_f1_path, best_micro_f1_path = None, None
 
@@ -278,8 +286,6 @@ def train(
                     print('best micro', best_micro_f1_path, best_micro_f1)
                     print('best macro', best_macro_f1_path, best_macro_f1)
 
-    if args.local_rank in [-1, 0] and tb_writer:
-        tb_writer.close()
     return best_macro_f1_path, best_micro_f1_path
 
 def save_step(args, model, optimizer, global_step, scheduler):
@@ -296,37 +302,42 @@ def save_step(args, model, optimizer, global_step, scheduler):
     logger.info("Saving model checkpoint %d into %s", global_step, save_path)
     return save_path
 
-def create_train_dataset(args, training_features, model, tokenizer, train_batch_size, global_step):
+def create_train_dataset(
+        args: HBGLTrainingArguments,
+        training_features: list[TrainingExample],
+        model: BertForSequenceToSequence,
+        tokenizer: BertTokenizer,
+        train_batch_size: int,
+        global_step: int
+):
     train_dataset = Seq2seqDatasetForBert(
-        features=training_features, max_source_len=args.max_source_seq_length,
-        max_target_len=args.max_target_seq_length, vocab_size=model.bert.embeddings.word_embeddings.num_embeddings,
-        cls_id=tokenizer.cls_token_id, sep_id=tokenizer.sep_token_id, pad_id=tokenizer.pad_token_id,
-        mask_id=tokenizer.mask_token_id, random_prob=args.random_prob, keep_prob=args.keep_prob,
-        offset=train_batch_size * global_step, num_training_instances=train_batch_size * args.num_training_steps,
-        source_mask_prob=args.source_mask_prob, target_mask_prob=args.target_mask_prob,
-        mask_way=args.mask_way, num_max_mask_token=args.num_max_mask_token,
+        features=training_features,
+        max_source_len=args.max_source_seq_length,
+        max_target_len=args.max_target_seq_length,
+        vocab_size=model.bert.embeddings.word_embeddings.num_embeddings,
+        tokenizer=tokenizer,
+        offset=train_batch_size * global_step,
+        num_training_instances=train_batch_size * args.num_training_steps,
+        source_mask_prob=args.source_mask_prob,
+        target_mask_prob=args.target_mask_prob,
+        mask_way=args.mask_way,
+        num_max_mask_token=args.num_max_mask_token,
         soft_label=args.soft_label,
     )
 
     logger.info("Check dataset:")
     for i in range(5):
-        ids = train_dataset.__getitem__(i)
-        if ids is None:
-            raise ValueError(f"No data at index={i}")
-
-        source_ids, target_ids = ids[:2]
+        source_ids, target_ids, _, _, _, _ = train_dataset[i]
         logger.info("Instance-%d" % i)
         logger.info("Source tokens = %s" % " ".join(tokenizer.convert_ids_to_tokens(source_ids)))
         if args.soft_label:
             real_target_ids = []
-            if type(target_ids) is list:
-                target_ids = torch.tensor(target_ids)
             for i in range(target_ids.shape[0]):
                 real_target_ids.append(torch.arange(target_ids.shape[-1])[target_ids[i].bool()].tolist())
             for rti in real_target_ids:
                 logger.info("Target tokens = %s" % " ".join(tokenizer.convert_ids_to_tokens(rti)))
         else:
-            logger.info("Target tokens = %s" % " ".join(tokenizer.convert_ids_to_tokens(target_ids)))
+            raise NotImplementedError("Not supported yet")
 
     logger.info("Mode = %s" % str(model))
     return train_dataset

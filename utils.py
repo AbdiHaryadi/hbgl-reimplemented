@@ -11,6 +11,7 @@ import lmdb
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+from transformers import BertTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -20,27 +21,40 @@ class TrainingExample(object):
         self.target_ids = target_ids
         self.example_id = example_id
 
+Seq2seqDatasetForBertElementType = tuple[list[int], torch.Tensor, torch.Tensor, list[int], int, int]
 class Seq2seqDatasetForBert(torch.utils.data.Dataset):
     def __init__(
-            self, features, max_source_len, max_target_len,
-            vocab_size, cls_id, sep_id, pad_id, mask_id,
-            random_prob, keep_prob, offset, num_training_instances, 
-            mask_way='v1', target_mask_prob=-1.0, num_max_mask_token=0, 
-            source_mask_prob=-1.0,
-            soft_label=False,
-            ):
+            self,
+            features: list[TrainingExample],
+            max_source_len: int,
+            max_target_len: int,
+            vocab_size: int,
+            tokenizer: BertTokenizer,
+            offset: int,
+            num_training_instances: int, 
+            mask_way: str = 'v1',
+            target_mask_prob: float = -1.0,
+            num_max_mask_token: int = 0 , 
+            source_mask_prob: float = -1.0,
+            soft_label: bool = False,
+    ):
+        assert isinstance(tokenizer.cls_token_id, int)
+        assert isinstance(tokenizer.sep_token_id, int)
+        assert isinstance(tokenizer.pad_token_id, int)
+        assert isinstance(tokenizer.mask_token_id, int)
+        
         self.features = features
         self.max_source_len = max_source_len
         self.max_target_len = max_target_len
         self.offset = offset
         if offset > 0:
             logger.info("  ****  Set offset %d in Seq2seqDatasetForBert ****  ", offset)
-        self.cls_id = cls_id
-        self.sep_id = sep_id
-        self.pad_id = pad_id
-        self.random_prob = random_prob
-        self.keep_prob = keep_prob
-        self.mask_id = mask_id
+        self.cls_id = tokenizer.cls_token_id
+        self.sep_id = tokenizer.sep_token_id
+        self.pad_id = tokenizer.pad_token_id
+        self.random_prob = 0.0
+        self.keep_prob = 0.0
+        self.mask_id = tokenizer.mask_token_id
         self.vocab_size = vocab_size
         self.num_training_instances = num_training_instances
         self.target_mask_prob = target_mask_prob
@@ -57,7 +71,7 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
     def __len__(self):
         return self.num_training_instances
 
-    def __trunk(self, ids, max_len, append_sep=True):
+    def __trunk(self, ids: list[int], max_len: int, append_sep=True):
         if append_sep:
             max_len -= 1
         if len(ids) > max_len:
@@ -73,16 +87,12 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
             assert len(ids) == max_len
             return ids
 
-    def get_masked_token(self, tk_id):
-        p = random.random()
-        if p < self.keep_prob:
-            return tk_id
-        elif p < self.keep_prob + self.random_prob:
-            return random.randint(0, self.vocab_size - 1)
-        else:
-            return self.mask_id
+    def get_masked_token(self):
+        # We ignore the case when using random token prob and keep prob
+        # since it's not supported in HBGL.
+        return self.mask_id
 
-    def soft_label_getitem(self, _idx):
+    def soft_label_getitem(self, _idx: int):
         assert self.mask_way == 'v2'
         idx = (self.offset + _idx) % len(self.features)
         # print("%d get %d" % (_idx, idx))
@@ -109,7 +119,7 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
                 if tk_id != self.cls_id and tk_id != self.sep_id:
                     r = random.random()
                     if r < self.source_mask_prob:
-                        source_ids[i] = self.get_masked_token(tk_id)
+                        source_ids[i] = self.get_masked_token()
 
         source_ids = self.__pad(source_ids, self.max_source_len)
         # target_ids = self.__pad(target_ids, self.max_target_len)
@@ -124,18 +134,18 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
             num_target_tokens,
         )
 
-    def get_num_target_tokens_by_target_ids(self, target_ids):
+    def get_num_target_tokens_by_target_ids(self, target_ids: torch.Tensor):
         return target_ids.shape[0]
 
-    def unnamed_method(self, target_ids):
+    def unnamed_method(self, target_ids: torch.Tensor):
+        # target_ids is two dimensional
         num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
 
         pseudo_ids = []
         label_ids = []
         for pos in range(num_target_tokens):
             tk_id = target_ids[pos]
-            masked_tk_id = self.get_masked_token(tk_id)
-            assert  type(masked_tk_id) is int
+            masked_tk_id = self.get_masked_token()
             pseudo_ids.append(masked_tk_id)
             label_ids.append(tk_id.clone())
             r = random.random()
@@ -154,100 +164,31 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
 
         return target_ids, label_ids, pseudo_ids
 
-    def __getitem__(self, _idx):
-        if self.soft_label:
-            return self.soft_label_getitem(_idx)
-        idx = (self.offset + _idx) % len(self.features)
-        # print("%d get %d" % (_idx, idx))
-        feature = self.features[idx]
-        source_ids = self.__trunk([self.cls_id] + feature.source_ids, self.max_source_len, append_sep=self.mask_way != 'v0')
-        target_ids = feature.target_ids
-        if self.mask_way == 'v0':
-            target_ids = [self.sep_id] + target_ids
-        target_ids = self.__trunk(target_ids, self.max_target_len, append_sep=self.mask_way != 'v0')
+    def __getitem__(self, _idx) -> Seq2seqDatasetForBertElementType:
+        if not self.soft_label:
+            raise NotImplementedError("Not implemented yet.")
+        
+        return self.soft_label_getitem(_idx)
 
-        num_source_tokens = len(source_ids)
-        num_target_tokens = len(target_ids)
-
-        if self.source_mask_prob > 0:
-            for i in range(num_source_tokens):
-                tk_id = source_ids[i]
-                if tk_id != self.cls_id and tk_id != self.sep_id:
-                    r = random.random()
-                    if r < self.source_mask_prob:
-                        source_ids[i] = self.get_masked_token(tk_id)
-
-        source_ids = self.__pad(source_ids, self.max_source_len)
-        target_ids = self.__pad(target_ids, self.max_target_len)
-
-        if self.mask_way == 'v0':
-            masked_pos = []
-            masked_ids = []
-            masked_weights = []
-            for pos in range(num_target_tokens):
-                if pos + 1 != num_target_tokens:
-                    masked_ids.append(target_ids[pos + 1])
-                else:
-                    masked_ids.append(self.sep_id)
-                masked_pos.append(pos)
-                masked_weights.append(1)
-
-                r = random.random()
-                if r < self.target_mask_prob and pos > 0:
-                    target_ids[pos] = self.get_masked_token(target_ids[pos])
-            
-            masked_ids = self.__pad(masked_ids, self.num_max_mask_token)
-            masked_pos = self.__pad(masked_pos, self.num_max_mask_token)
-            masked_weights = self.__pad(masked_weights, self.num_max_mask_token)
-
-            return source_ids, target_ids, masked_ids, masked_pos, masked_weights, num_source_tokens, num_target_tokens
-        elif self.mask_way == 'v1':
-            masked_pos = list(range(num_target_tokens))
-            random.shuffle(masked_pos)
-
-            num_masked_token = \
-                min(self.num_max_mask_token, int(self.target_mask_prob * num_target_tokens))
-            if num_masked_token <= 0:
-                num_masked_token = 1
-
-            masked_pos = masked_pos[:num_masked_token]
-
-            masked_ids = []
-            masked_weights = []
-            for pos in masked_pos:
-                masked_ids.append(target_ids[pos])
-                target_ids[pos] = self.get_masked_token(target_ids[pos])
-                masked_weights.append(1)
-            
-            masked_ids = self.__pad(masked_ids, self.num_max_mask_token)
-            masked_pos = self.__pad(masked_pos, self.num_max_mask_token)
-            masked_weights = self.__pad(masked_weights, self.num_max_mask_token)
-
-            return source_ids, target_ids, masked_ids, masked_pos, masked_weights, num_source_tokens, num_target_tokens
-        elif self.mask_way == 'v2':
-            pseudo_ids = []
-            label_ids = []
-            for pos in range(num_target_tokens):
-                tk_id = target_ids[pos]
-                masked_tk_id = self.get_masked_token(tk_id)
-                pseudo_ids.append(masked_tk_id)
-                label_ids.append(tk_id)
-                r = random.random()
-                if r < self.target_mask_prob:
-                    target_ids[pos] = masked_tk_id
-            label_ids = self.__pad(label_ids, self.max_target_len)
-            pseudo_ids = self.__pad(pseudo_ids, self.max_target_len)
-
-            return source_ids, target_ids, label_ids, pseudo_ids, num_source_tokens, num_target_tokens
-
-def batch_list_to_batch_tensors(batch):
-    batch_tensors = []
-    for x in zip(*batch):
-        if isinstance(x[0], torch.Tensor):
-            batch_tensors.append(torch.stack(x))
-        else:
-            batch_tensors.append(torch.tensor(x, dtype=torch.long))
-    return batch_tensors
+def batch_list_to_batch_tensors(batch: list[Seq2seqDatasetForBertElementType]):
+    """
+    (
+        source_ids,
+        target_ids,
+        label_ids,
+        pseudo_ids,
+        num_source_tokens,
+        num_target_tokens,
+    )
+    """
+    return (
+        torch.tensor([x[0] for x in batch], dtype=torch.long),
+        torch.stack([x[1] for x in batch]),
+        torch.stack([x[2] for x in batch]),
+        torch.tensor([x[3] for x in batch], dtype=torch.long),
+        torch.tensor([x[4] for x in batch], dtype=torch.long),
+        torch.tensor([x[5] for x in batch], dtype=torch.long),
+    )
 
 def _fast_process_one(example, tokenizer):
     if isinstance(example["src"], list):
@@ -345,9 +286,10 @@ def load_and_cache_examples(
 
     if cached_features_file is not None and os.path.isfile(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file, weights_only=False)
+        features: list[TrainingExample] = torch.load(cached_features_file, weights_only=False)
     elif cached_features_file is not None and os.path.isdir(cached_features_file) \
         and os.path.exists(os.path.join(cached_features_file, 'lock.mdb')):
+        raise NotImplementedError("Seriously, I have no idea for this.")
         logger.info("Loading features from cached LMDB %s", cached_features_file)
         features = DocDB(cached_features_file)
     else:
@@ -357,7 +299,7 @@ def load_and_cache_examples(
         with open(example_file, mode="r", encoding="utf-8") as reader:
             for line in reader:
                 examples.append(json.loads(line))
-        features = []
+        features: list[TrainingExample] = []
 
         slc = defaultdict(int)
         tlc = defaultdict(int)
