@@ -9,7 +9,7 @@ from torch.nn import BCEWithLogitsLoss
 from torch.nn.modules.loss import _Loss
 import torch.nn.functional as F
 from transformers import BertPreTrainedModel
-from transformers.models.bert.modeling_bert import BertEmbeddings, BertIntermediate, BertOnlyMLMHead, BertOutput, BertPooler, BertSelfOutput
+from transformers.models.bert.modeling_bert import BertIntermediate, BertOnlyMLMHead, BertOutput, BertPooler, BertSelfOutput
 
 from config import BertForSeq2SeqConfig
 
@@ -263,6 +263,56 @@ class HBGLBertEncoder(nn.Module):
             outputs = outputs + (all_attentions,)
         return outputs  # last-layer hidden state, (all hidden states), (all attentions)
 
+class HBGLBertEmbeddings(nn.Module):
+    """Construct the embeddings from word, position and token_type embeddings.
+    """
+    def __init__(self, config):
+        super(HBGLBertEmbeddings, self).__init__()
+        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
+        fix_word_embedding = getattr(config, "fix_word_embedding", None)
+        if fix_word_embedding:
+            self.word_embeddings.weight.requires_grad = False
+        self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        if config.type_vocab_size > 0:
+            self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
+        else:
+            self.token_type_embeddings = None
+
+        # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
+        # any TensorFlow checkpoint file
+        self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None):
+        if input_ids is not None:
+            input_shape = input_ids.size()
+            device = input_ids.device
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+            device = inputs_embeds.device
+        else:
+            raise ValueError("One of them should be not None: input_ids, inputs_embeds")
+
+        seq_length = input_shape[1]
+        if position_ids is None:
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
+            position_ids = position_ids.unsqueeze(0).expand(input_shape)
+        if token_type_ids is None:
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+
+        if inputs_embeds is None:
+            inputs_embeds = self.word_embeddings(input_ids)
+        position_embeddings = self.position_embeddings(position_ids)
+
+        embeddings = inputs_embeds + position_embeddings
+
+        if self.token_type_embeddings:
+            embeddings = embeddings + self.token_type_embeddings(token_type_ids)
+
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings, position_ids
+
 class HBGLBertModel(BertPreTrainedForSeq2SeqModel):
     r"""
     Outputs: `Tuple` comprising various elements depending on the configuration (config) and inputs:
@@ -296,7 +346,7 @@ class HBGLBertModel(BertPreTrainedForSeq2SeqModel):
         super(HBGLBertModel, self).__init__(config)
         self.config = config
 
-        self.embeddings = BertEmbeddings(config)
+        self.embeddings = HBGLBertEmbeddings(config)
         self.encoder = HBGLBertEncoder(config)
         if not isinstance(config, BertForSeq2SeqConfig):
             self.pooler = BertPooler(config)
@@ -326,10 +376,7 @@ class HBGLBertModel(BertPreTrainedForSeq2SeqModel):
         if attention_mask is None:
             attention_mask = torch.ones(input_shape, device=device)
 
-        extended_attention_mask = self.get_extended_attention_mask(
-            attention_mask=attention_mask,
-            input_shape=input_shape
-        )
+        extended_attention_mask = self.get_extended_attention_mask(attention_mask)
 
         embedding_output, position_ids = self.embeddings(
             input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds)
@@ -352,6 +399,27 @@ class HBGLBertModel(BertPreTrainedForSeq2SeqModel):
         else:
             pooled_output = self.pooler(sequence_output)
             return sequence_output, pooled_output
+    
+    def get_extended_attention_mask(self, attention_mask: torch.Tensor):
+        # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
+        # ourselves in which case we just need to make it broadcastable to all heads.
+        if attention_mask.dim() == 3:
+            extended_attention_mask = attention_mask[:, None, :, :]
+
+        # Provided a padding mask of dimensions [batch_size, seq_length]
+        # - if the model is a decoder, apply a causal mask in addition to the padding mask
+        # - if the model is an encoder, make the mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
+        if attention_mask.dim() == 2:
+            extended_attention_mask = attention_mask[:, None, None, :]
+
+        # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+        # masked positions, this operation will create a tensor which is 0.0 for
+        # positions we want to attend and -10000.0 for masked positions.
+        # Since we are adding it to the raw scores before the softmax, this is
+        # effectively the same as removing these entirely.
+        # extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        return extended_attention_mask
 
 
 class LabelSmoothingLoss(_Loss):
@@ -437,10 +505,25 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
 
         self.post_init()
 
+    def concat_label_embeddings(self, label_embeddings: torch.Tensor):
+        self.bert.embeddings.word_embeddings.weight.data = torch.cat([
+            self.bert.embeddings.word_embeddings.weight.data,
+            label_embeddings
+        ], dim=0)
+        self.bert.embeddings.word_embeddings.num_embeddings += label_embeddings.shape[0]
+        self.cls.predictions.decoder.out_features += label_embeddings.shape[0]
+        self.cls.predictions.decoder.bias.data =  torch.cat([
+            self.cls.predictions.decoder.bias.data,
+            torch.zeros(label_embeddings.shape[0])
+        ], dim=0)
+        self.cls.predictions.bias.data =  torch.cat([
+            self.cls.predictions.bias.data,
+            torch.zeros(label_embeddings.shape[0])
+        ], dim=0)
+
 
 class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
     label_start_index = -1
-    ab_bound_token_id = -1
     MODEL_NAME = "BertForSequenceToSequenceWithPseudoMask"
     soft_label_hier_real = False
 
@@ -528,35 +611,12 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             sep_token = sep_tokens[0]
 
             new_label_ids[new_label_ids < 0] = 0 # sep token
-
             prediction_scores_masked = self.cls(pseudo_sequence_output)
             prediction_scores_masked = torch.cat([prediction_scores_masked[:, :, sep_token].unsqueeze(-1),
                                                   prediction_scores_masked[:, :, lsi:]], dim=-1)
 
             label_ids = new_label_ids
             # print(prediction_scores_masked, label_ids)
-        elif self.ab_bound_token_id > 0:
-            # prediction_scores_masked = self.cls(pseudo_sequence_output)
-            hidden_states = self.cls.predictions.transform(pseudo_sequence_output)
-            prediction_scores_masked = F.linear(hidden_states, weight=self.cls.predictions.decoder.weight, bias=self.cls.predictions.bias)
-
-            b_token_embs = self.cls.predictions.decoder.weight[self.ab_bound_token_id:, ]
-            new_b_token_embs = []
-            new_b_hidden_states  = []
-            for i, label_id in enumerate(label_ids.tolist()):
-                a = -1
-                for j, l in enumerate(label_id):
-                    if l == 102 or l == 0: break
-                    if l > self.ab_bound_token_id:
-                        assert a > 0
-                        new_b_token_embs.append(b_token_embs + self.cls.predictions.decoder.weight[a])
-                        new_b_hidden_states.append(hidden_states[i, j])
-                    else:
-                        a = l
-            new_b_hidden_states = torch.stack(new_b_hidden_states, dim=0)
-            new_b_token_embs = torch.stack(new_b_token_embs, dim=0)
-            prediction_scores_masked[label_ids > self.ab_bound_token_id][:,self.ab_bound_token_id:] =\
-                torch.bmm(new_b_token_embs, new_b_hidden_states.unsqueeze(-1)).squeeze(-1) + self.cls.predictions.bias[self.ab_bound_token_id:]
         else:
             prediction_scores_masked = self.cls(pseudo_sequence_output)
 

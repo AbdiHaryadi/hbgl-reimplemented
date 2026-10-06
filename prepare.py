@@ -149,11 +149,7 @@ def get_model_and_tokenizer(args: HBGLTrainingArguments):
         # for compare with same seed
         torch.set_rng_state(rng_state)
 
-        model.bert.embeddings.word_embeddings.weight.data = torch.cat([model.bert.embeddings.word_embeddings.weight.data, init_label_emb], dim=0)
-        model.bert.embeddings.word_embeddings.num_embeddings += len(label_to_id_map)
-        model.cls.predictions.decoder.weight.data = torch.cat([model.cls.predictions.decoder.weight.data, init_label_emb], dim=0)
-        model.cls.predictions.bias.data =  torch.cat([model.cls.predictions.bias.data, torch.zeros(len(label_to_id_map))],
-                                                        dim=0)
+        model.concat_label_embeddings(init_label_emb)
         old_vocab_size = model.config.vocab_size
         model.config.vocab_size = model.config.vocab_size + len(label_to_id_map)
     else:
