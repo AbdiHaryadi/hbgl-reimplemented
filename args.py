@@ -48,7 +48,7 @@ class HBGLTrainingArguments:
     lmdb_dtype: str = 'h'
     add_vocab_file: str | None = None
     wandb: bool = False
-    softmax_label_only: bool = False
+    softmax_label_only: bool = False  # <- TODO: Remove this
     soft_label: bool = False
     soft_label_hier_real: bool = False
     one_by_one_label_init_map: str | None = None
@@ -204,6 +204,115 @@ def parse_to_training_arguments(args=None):
     parser.add_argument('--rcv1_expand', type=str, default=None)
 
     return HBGLTrainingArguments(**{
+        k: v for k, v in vars(parser.parse_args(args=args)).items()
+        if v is not None
+    })
+
+@dataclass
+class HBGLTestingArguments:
+    # Required parameters
+    model_path: str
+    tokenizer_name: str
+
+    # Other parameters
+    config_path: str | None = None
+    max_seq_length: int = 512
+
+    ## Decoding parameters
+    no_cuda: bool = False
+    input_file: str | None = None
+    subset: int = 0
+    output_file: str | None = None
+    split: str = ''
+    tokenized_input: bool = False
+    seed: int = 123
+    do_lower_case: bool = False
+    batch_size: int = 4
+    beam_size: int = 1
+    length_penalty: int = 0
+
+    forbid_duplicate_ngrams: bool = False
+    forbid_ignore_word: str | None = None
+    min_len: int = 1
+    ngram_size: int = 3
+    mode: str = 's2s'
+    max_tgt_length: int = 128
+    s2s_special_token: bool = False
+    s2s_add_segment: bool = False
+    s2s_share_segment: bool = False
+    pos_shift: bool = False
+    cache_dir: str | None = None
+    add_vocab_file: str | None = None
+    cached_features_file: str | None = None
+    softmax_label_only: bool = False
+    soft_label: bool = False
+    soft_label_hier_real_with_train_file: str | None = None
+
+def parse_to_testing_arguments(args=None):
+    parser = argparse.ArgumentParser()
+    
+    # Required parameters
+    parser.add_argument("--model_path", default=None, type=str, required=True,
+                        help="Path to the model checkpoint.")
+    parser.add_argument("--config_path", default=None, type=str,
+                        help="Path to config.json for the model.")
+
+    # tokenizer_name
+    parser.add_argument("--tokenizer_name", default=None, type=str, required=True,
+                        help="tokenizer name")
+    parser.add_argument("--max_seq_length", default=512, type=int,
+                        help="The maximum total input sequence length after WordPiece tokenization. \n"
+                            "Sequences longer than this will be truncated, and sequences shorter \n"
+                            "than this will be padded.")
+
+    # decoding parameters
+    parser.add_argument('--no_cuda', action='store_true',
+                        help="Whether to use CUDA for decoding")
+    parser.add_argument("--input_file", type=str, help="Input file")
+    parser.add_argument('--subset', type=int, default=0,
+                        help="Decode a subset of the input dataset.")
+    parser.add_argument("--output_file", type=str, help="output file")
+    parser.add_argument("--split", type=str, default="",
+                        help="Data split (train/val/test).")
+    parser.add_argument('--tokenized_input', action='store_true',
+                        help="Whether the input is tokenized.")
+    parser.add_argument('--seed', type=int, default=123,
+                        help="random seed for initialization")
+    parser.add_argument("--do_lower_case", action='store_true',
+                        help="Set this flag if you are using an uncased model.")
+    parser.add_argument('--batch_size', type=int, default=4,
+                        help="Batch size for decoding.")
+    parser.add_argument('--beam_size', type=int, default=1,
+                        help="Beam size for searching")
+    parser.add_argument('--length_penalty', type=float, default=0,
+                        help="Length penalty for beam search")
+
+    parser.add_argument('--forbid_duplicate_ngrams', action='store_true')
+    parser.add_argument('--forbid_ignore_word', type=str, default=None,
+                        help="Forbid the word during forbid_duplicate_ngrams")
+    parser.add_argument("--min_len", default=1, type=int)
+    parser.add_argument('--ngram_size', type=int, default=3)
+    parser.add_argument('--mode', default="s2s",
+                        choices=["s2s", "l2r", "both"])
+    parser.add_argument('--max_tgt_length', type=int, default=128,
+                        help="maximum length of target sequence")
+    parser.add_argument('--s2s_special_token', action='store_true',
+                        help="New special tokens ([S2S_SEP]/[S2S_CLS]) of S2S.")
+    parser.add_argument('--s2s_add_segment', action='store_true',
+                        help="Additional segmental for the encoder of S2S.")
+    parser.add_argument('--s2s_share_segment', action='store_true',
+                        help="Sharing segment embeddings for the encoder of S2S (used with --s2s_add_segment).")
+    parser.add_argument('--pos_shift', action='store_true',
+                        help="Using position shift for fine-tuning.")
+    parser.add_argument("--cache_dir", default=None, type=str,
+                        help="Where do you want to store the pre-trained models downloaded from s3")
+    parser.add_argument("--add_vocab_file", type=str, default=None)
+    parser.add_argument("--cached_features_file", type=str, default=None)
+    parser.add_argument('--softmax_label_only', action='store_true')
+    parser.add_argument('--soft_label', action='store_true')
+    parser.add_argument('--soft_label_hier_real_with_train_file', default=None, type=str)
+
+    return HBGLTestingArguments(**{
         k: v for k, v in vars(parser.parse_args(args=args)).items()
         if v is not None
     })

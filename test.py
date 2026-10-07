@@ -19,6 +19,7 @@ from tqdm import tqdm
 import torch
 from transformers import BertConfig, BertTokenizer
 
+from args import HBGLTestingArguments, parse_to_testing_arguments
 from eval import evaluate
 from modeling_decoding import BertForSeq2SeqDecoder
 import seq2seq_loader
@@ -57,19 +58,7 @@ def detokenize(tk_list):
             r_list.append(tk)
     return r_list
 
-
-def main(flags=None):
-    """
-    https://github.com/kongds/HBGL/blob/master/test.py
-
-    Removed some of it:
-    - --model_type
-    - TOKENIZER_CLASSES -> BertTokenizer only
-    """
-
-    args = get_args(flags)
-
-
+def main(args: HBGLTestingArguments):
     if args.max_tgt_length >= args.max_seq_length - 2:
         raise ValueError("Maximum tgt length exceeds max seq length - 2.")
 
@@ -82,9 +71,9 @@ def main(flags=None):
 
     if args.add_vocab_file:
         with open(args.add_vocab_file, 'rb') as f:
-            label_map = pickle.load(f)
-        labels_key = list(label_map.keys())
-        tokenizer.add_tokens([label_map[label] for label in labels_key])
+            label_to_id_map = pickle.load(f)
+        labels_key = list(label_to_id_map.keys())
+        tokenizer.add_tokens([label_to_id_map[label] for label in labels_key])
         add_token_num = len(labels_key)
 
     if hasattr(tokenizer, 'model_max_length'):
@@ -161,7 +150,7 @@ def main(flags=None):
             token = token.lower()
             try:
                 token = int(token.replace('[a_', '').replace(']', ''))
-                token = 0 if token >= len(label_map) else token
+                token = 0 if token >= len(label_to_id_map) else token
                 return token
             except:
                 return 0
@@ -173,8 +162,8 @@ def main(flags=None):
             gd_labels = [[token_to_id(j) for j  in i.split(' ')] for i in gd_labels]
 
         with open(args.add_vocab_file, 'rb') as f:
-            label_map = pickle.load(f)
-        id2label = {token_to_id(label_map[k]): k for k in label_map}
+            label_to_id_map = pickle.load(f)
+        id2label = {token_to_id(label_to_id_map[k]): k for k in label_to_id_map}
         out = evaluate(predict_labels, gd_labels, id2label, as_sample=True)
         del out['full']
         print(out)
@@ -275,75 +264,6 @@ def setup_seed(args):
         if n_gpu > 0:
             torch.cuda.manual_seed_all(args.seed)
 
-def get_args(flags=None):
-    parser = argparse.ArgumentParser()
-
-    # Required parameters
-    parser.add_argument("--model_path", default=None, type=str, required=True,
-                        help="Path to the model checkpoint.")
-    parser.add_argument("--config_path", default=None, type=str,
-                        help="Path to config.json for the model.")
-
-    # tokenizer_name
-    parser.add_argument("--tokenizer_name", default=None, type=str, required=True,
-                        help="tokenizer name")
-    parser.add_argument("--max_seq_length", default=512, type=int,
-                        help="The maximum total input sequence length after WordPiece tokenization. \n"
-                            "Sequences longer than this will be truncated, and sequences shorter \n"
-                            "than this will be padded.")
-
-    # decoding parameters
-    parser.add_argument('--no_cuda', action='store_true',
-                        help="Whether to use CUDA for decoding")
-    parser.add_argument("--input_file", type=str, help="Input file")
-    parser.add_argument('--subset', type=int, default=0,
-                        help="Decode a subset of the input dataset.")
-    parser.add_argument("--output_file", type=str, help="output file")
-    parser.add_argument("--split", type=str, default="",
-                        help="Data split (train/val/test).")
-    parser.add_argument('--tokenized_input', action='store_true',
-                        help="Whether the input is tokenized.")
-    parser.add_argument('--seed', type=int, default=123,
-                        help="random seed for initialization")
-    parser.add_argument("--do_lower_case", action='store_true',
-                        help="Set this flag if you are using an uncased model.")
-    parser.add_argument('--batch_size', type=int, default=4,
-                        help="Batch size for decoding.")
-    parser.add_argument('--beam_size', type=int, default=1,
-                        help="Beam size for searching")
-    parser.add_argument('--length_penalty', type=float, default=0,
-                        help="Length penalty for beam search")
-
-    parser.add_argument('--forbid_duplicate_ngrams', action='store_true')
-    parser.add_argument('--forbid_ignore_word', type=str, default=None,
-                        help="Forbid the word during forbid_duplicate_ngrams")
-    parser.add_argument("--min_len", default=1, type=int)
-    parser.add_argument('--ngram_size', type=int, default=3)
-    parser.add_argument('--mode', default="s2s",
-                        choices=["s2s", "l2r", "both"])
-    parser.add_argument('--max_tgt_length', type=int, default=128,
-                        help="maximum length of target sequence")
-    parser.add_argument('--s2s_special_token', action='store_true',
-                        help="New special tokens ([S2S_SEP]/[S2S_CLS]) of S2S.")
-    parser.add_argument('--s2s_add_segment', action='store_true',
-                        help="Additional segmental for the encoder of S2S.")
-    parser.add_argument('--s2s_share_segment', action='store_true',
-                        help="Sharing segment embeddings for the encoder of S2S (used with --s2s_add_segment).")
-    parser.add_argument('--pos_shift', action='store_true',
-                        help="Using position shift for fine-tuning.")
-    parser.add_argument("--cache_dir", default=None, type=str,
-                        help="Where do you want to store the pre-trained models downloaded from s3")
-    parser.add_argument("--add_vocab_file", type=str, default=None)
-    parser.add_argument("--cached_features_file", type=str, default=None)
-    parser.add_argument('--softmax_label_only', action='store_true')
-    parser.add_argument('--soft_label', action='store_true')
-    parser.add_argument('--soft_label_hier_real_with_train_file', default=None, type=str)
-
-    if flags:
-        print(flags)
-    
-    return parser.parse_args(flags)
-
 def tokenizer_vocab_words(tokenizer):
     max_id = max(tokenizer.vocab.values())
     vocab_words = [f"[unused{id}]" for id in range(max_id + 1)]
@@ -375,4 +295,4 @@ def prepare_hier_labels(args, tokenizer, model):
     model.soft_label_hier_real = True
 
 if __name__ == "__main__":
-    print(main())
+    print(main(parse_to_testing_arguments()))

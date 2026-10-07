@@ -483,12 +483,15 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
     sep_token_id: int = -1
     vs: int = -1
 
+    _tied_weights_keys = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
+
     def __init__(self, config):
         super(BertForSequenceToSequence, self).__init__(config)
         self.bert = HBGLBertModel(config)
         self.cls = BertOnlyMLMHead(config)
-        self.cls.predictions.decoder.weight = self.bert.embeddings.word_embeddings.weight
-        self.init_weights()
 
         self.log_softmax = nn.LogSoftmax()
 
@@ -512,15 +515,13 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
         ], dim=0)
         self.bert.embeddings.word_embeddings.num_embeddings += label_embeddings.shape[0]
         self.cls.predictions.decoder.out_features += label_embeddings.shape[0]
-        self.cls.predictions.decoder.bias.data =  torch.cat([
-            self.cls.predictions.decoder.bias.data,
-            torch.zeros(label_embeddings.shape[0])
-        ], dim=0)
         self.cls.predictions.bias.data =  torch.cat([
             self.cls.predictions.bias.data,
             torch.zeros(label_embeddings.shape[0])
         ], dim=0)
 
+        assert self.cls.predictions.decoder.weight is self.bert.embeddings.word_embeddings.weight
+        assert self.cls.predictions.decoder.bias is self.cls.predictions.bias
 
 class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
     label_start_index = -1

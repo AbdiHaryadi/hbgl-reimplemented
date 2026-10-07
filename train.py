@@ -11,7 +11,7 @@ from tqdm import tqdm
 from transformers import BertTokenizer, get_linear_schedule_with_warmup
 import wandb
 
-from args import HBGLTrainingArguments
+from args import HBGLTestingArguments, HBGLTrainingArguments
 from modeling_v2 import BertForSequenceToSequence
 import test
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
@@ -248,10 +248,37 @@ def train(
                     if args.soft_label_hier_real:
                         flags.append('--soft_label_hier_real_with_train_file')
                         flags.append(args.train_file)
-                    if args.label_cpt_decodewithpos:
-                        flags.append('--target_no_offset')
 
-                    out = test.main(flags)
+                    out = test.main(HBGLTestingArguments(
+                        tokenizer_name=args.model_name_or_path,
+                        input_file=args.valid_file,
+                        split="valid",
+                        do_lower_case=True,
+                        model_path=save_path,
+                        max_seq_length=(
+                            args.max_source_seq_length + args.max_target_seq_length
+                            if args.label_cpt_decodewithpos
+                            else args.max_source_seq_length
+                        ),
+                        max_tgt_length=args.max_target_seq_length,
+                        batch_size=32,
+                        beam_size=1,
+                        length_penalty=0,
+                        forbid_duplicate_ngrams=True,
+                        mode="s2s",
+                        forbid_ignore_word='"."',
+                        cached_features_file=os.path.join(
+                            args.output_dir,
+                            "cached_features_for_valid.pt"
+                        ),
+                        add_vocab_file=args.add_vocab_file,
+                        softmax_label_only=args.softmax_label_only,
+                        soft_label=args.soft_label,
+                        soft_label_hier_real_with_train_file=(
+                            args.train_file if args.soft_label_hier_real
+                            else None
+                        ),
+                    ))
                     if out:
                         if args.wandb:
                             wandb.log({'eval/macro_f1': out['macro_f1'], 'eval/micro_f1': out['micro_f1']})
@@ -288,16 +315,29 @@ def train(
 
     return best_macro_f1_path, best_micro_f1_path
 
-def save_step(args, model, optimizer, global_step, scheduler):
+# torch.nn.DataParallel
+def save_step(
+        args: HBGLTrainingArguments,
+        model: BertForSequenceToSequence | torch.nn.DataParallel[BertForSequenceToSequence] | torch.nn.parallel.DistributedDataParallel,
+        optimizer: AdamW,
+        global_step: int,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+):
     save_path = os.path.join(args.output_dir, "ckpt-%d" % global_step)
     os.makedirs(save_path, exist_ok=True)
-    model_to_save = model.module if hasattr(model, "module") else model
+    if isinstance(model, torch.nn.DataParallel):
+        model_to_save = model.module
+    elif isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model_to_save = model.module
+        assert isinstance(model_to_save, BertForSequenceToSequence)
+    else:
+        model_to_save = model
     model_to_save.save_pretrained(save_path)
 
     optim_to_save = {
-                        "optimizer": optimizer.state_dict(),
-                        "lr_scheduler": scheduler.state_dict(),
-                    }
+        "optimizer": optimizer.state_dict(),
+        "lr_scheduler": scheduler.state_dict(),
+    }
     torch.save(optim_to_save, os.path.join(save_path, OPTIM_NAME))
     logger.info("Saving model checkpoint %d into %s", global_step, save_path)
     return save_path

@@ -8,7 +8,7 @@ import torch
 from transformers import BertTokenizer
 import wandb
 
-from args import HBGLTrainingArguments, parse_to_training_arguments
+from args import HBGLTestingArguments, HBGLTrainingArguments, parse_to_training_arguments
 from prepare import get_model_and_tokenizer
 from train import train
 from test import main as test_main
@@ -52,38 +52,41 @@ def prepare(args: HBGLTrainingArguments):
 
     logger.info("Training/evaluation parameters %s", args)
 
-def test(args, best_macro_f1_path, best_micro_f1_path):
+def test(
+        args: HBGLTrainingArguments,
+        best_macro_f1_path: str | None,
+        best_micro_f1_path: str | None
+):
     bout = None
     for i, save_path in enumerate([best_micro_f1_path, best_macro_f1_path]):
         if save_path is None: continue
-        flags = [
-            '--tokenizer_name'         , args.model_name_or_path             ,
-            '--input_file'             , args.test_file                  ,
-            '--split'                  , 'test'                         ,
-            '--do_lower_case'          ,
-            '--model_path'             , str(save_path)              ,
-            '--max_seq_length'         , str(args.max_source_seq_length + args.max_target_seq_length) if args.label_cpt_decodewithpos else str(args.max_source_seq_length)             ,
-            '--max_tgt_length'         , str(args.max_target_seq_length)             ,
-            '--batch_size'             , '128'                            ,
-            '--beam_size'              , '1'                             ,
-            '--length_penalty'         , '0'                             ,
-            '--forbid_duplicate_ngrams',
-            '--mode'                   , 's2s'                           ,
-            '--forbid_ignore_word'     , '"."'                           ,
-            '--cached_features_file'   , str(os.path.join(args.output_dir, "cached_features_for_test.pt")),
-            '--add_vocab_file'         , args.add_vocab_file]
 
-        if args.softmax_label_only:
-            flags.append('--softmax_label_only')
-        if args.soft_label:
-            flags.append('--soft_label')
-        if args.soft_label_hier_real:
-            flags.append('--soft_label_hier_real_with_train_file')
-            flags.append(args.train_file)
-        if args.label_cpt_decodewithpos:
-            flags.append('--target_no_offset')
-
-        out = test_main(flags)
+        out = test_main(HBGLTestingArguments(
+            tokenizer_name=args.model_name_or_path,
+            input_file=args.test_file,
+            split="test",
+            do_lower_case=True,
+            model_path=save_path,
+            max_seq_length=(
+                args.max_source_seq_length + args.max_target_seq_length
+                if args.label_cpt_decodewithpos
+                else args.max_source_seq_length
+            ),
+            max_tgt_length=args.max_target_seq_length,
+            batch_size=128,
+            beam_size=1,
+            length_penalty=0,
+            forbid_duplicate_ngrams=True,
+            mode="s2s",
+            forbid_ignore_word='"."',
+            cached_features_file=os.path.join(args.output_dir, "cached_features_for_test.pt"),
+            add_vocab_file=args.add_vocab_file,
+            softmax_label_only=args.softmax_label_only,
+            soft_label=args.soft_label,
+            soft_label_hier_real_with_train_file=(
+                args.train_file if args.soft_label_hier_real else None
+            )
+        ))
         prefix = 'test' + 'micro' if i == 0 else 'macro'
         if args.wandb and out is not None:
             wandb.log({f'{prefix}/macro_f1': out['macro_f1'], f'{prefix}/micro_f1': out['micro_f1']})
