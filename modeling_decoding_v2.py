@@ -22,11 +22,14 @@ logger = logging.getLogger(__name__)
 class BertModelIncr(BertModel):
     def __init__(self, config):
         super(BertModelIncr, self).__init__(config)
+        self.pooler = None  # We don't care about the pooler.
 
         if self.config.rel_pos_bins > 0:
             self.rel_pos_bias = nn.Linear(self.config.rel_pos_bins, config.num_attention_heads, bias=False)
         else:
             self.rel_pos_bias = None
+
+        self.post_init()
 
     def forward(self, input_ids, token_type_ids, position_ids, attention_mask, output_all_encoded_layers=True,
                 prev_embedding=None, prev_encoded_layers=None, mask_qkv=None, task_idx=None, rel_pos=None,
@@ -51,14 +54,17 @@ class BertModelIncr(BertModel):
                                       prev_embedding=prev_embedding,
                                       prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv,
                                       seg_ids=token_type_ids, rel_pos=rel_pos)
-        sequence_output = encoded_layers[-1]
-        pooled_output = self.pooler(sequence_output) if self.pooler else None
         if not output_all_encoded_layers:
             encoded_layers = encoded_layers[-1]
-        return embedding_output, encoded_layers, pooled_output
+        return embedding_output, encoded_layers
 
 
 class BertForSeq2SeqDecoder(BertPreTrainedModel):
+    _tied_weights_keys = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
+    
     def __init__(self, config, mask_word_id=0, num_labels=2, num_rel=0,
                  search_beam_size=1, length_penalty=1.0, eos_id=0, sos_id=0,
                  forbid_duplicate_ngrams=False, forbid_ignore_set=None, ngram_size=3, min_len=0, mode="s2s",
@@ -66,7 +72,6 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         super(BertForSeq2SeqDecoder, self).__init__(config)
         self.bert = BertModelIncr(config)
         self.cls = BertOnlyMLMHead(config)
-        self.cls.predictions.decoder.weight = self.bert.embeddings.word_embeddings.weight
 
         self.crit_mask_lm = nn.CrossEntropyLoss(reduction='none')
         self.crit_next_sent = nn.CrossEntropyLoss(ignore_index=-1)
@@ -165,13 +170,13 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 cur_rel_pos = None
 
             if self.soft_label and x_input_embeds is not None:
-                new_embedding, new_encoded_layers, _ = \
+                new_embedding, new_encoded_layers = \
                     self.bert(None, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                             output_all_encoded_layers=True, prev_embedding=prev_embedding,
                               prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos,
                               inputs_embeds=x_input_embeds, )
             else:
-                new_embedding, new_encoded_layers, _ = \
+                new_embedding, new_encoded_layers = \
                     self.bert(x_input_ids, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                             output_all_encoded_layers=True, prev_embedding=prev_embedding,
                             prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos)
@@ -365,7 +370,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 cur_rel_pos = rel_pos[:, start_pos:next_pos + 1, :next_pos + 1]
             else:
                 cur_rel_pos = None
-            new_embedding, new_encoded_layers, _ = \
+            new_embedding, new_encoded_layers = \
                 self.bert(x_input_ids, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                           output_all_encoded_layers=True, prev_embedding=prev_embedding,
                           prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos)

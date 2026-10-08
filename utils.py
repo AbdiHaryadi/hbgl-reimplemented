@@ -287,11 +287,6 @@ def load_and_cache_examples(
     if cached_features_file is not None and os.path.isfile(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
         features: list[TrainingExample] = torch.load(cached_features_file, weights_only=False)
-    elif cached_features_file is not None and os.path.isdir(cached_features_file) \
-        and os.path.exists(os.path.join(cached_features_file, 'lock.mdb')):
-        raise NotImplementedError("Seriously, I have no idea for this.")
-        logger.info("Loading features from cached LMDB %s", cached_features_file)
-        features = DocDB(cached_features_file)
     else:
         logger.info("Creating features from dataset file at %s", example_file)
 
@@ -335,11 +330,8 @@ def load_and_cache_examples(
         report_length(tlc, total_count=len(examples))
 
         if local_rank in [-1, 0] and cached_features_file is not None:
-            if lmdb_cache:
-                raise NotImplementedError("Not support it yet.")
-            else:
-                logger.info("Saving features into cached file %s", cached_features_file)
-                torch.save(features, cached_features_file)
+            logger.info("Saving features into cached file %s", cached_features_file)
+            torch.save(features, cached_features_file)
 
     # Make sure only the first process in distributed training process the dataset, and the others will use the cache
     if local_rank == 0:
@@ -360,7 +352,7 @@ def load_and_cache_examples_fast(
 
     if cached_features_file is not None and os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file, weights_only=False)
+        features: list[TrainingExample] = torch.load(cached_features_file, weights_only=False)
     else:
         logger.info("Creating features from dataset file at %s", example_file)
 
@@ -372,14 +364,14 @@ def load_and_cache_examples_fast(
         logger.info("Staring processing")
         b = time.time()
         with Pool() as p:
-            features = p.starmap(_fast_process_one, [(i, tokenizer) for i in examples])
+            raw_features = p.starmap(_fast_process_one, [(i, tokenizer) for i in examples])
 
         features = [
             TrainingExample(
                 source_ids=f['source_ids'],
                 target_ids=f['target_ids'] if not eval_mode else [],
                 example_id=i,
-            ) for i, f in enumerate(features)
+            ) for i, f in enumerate(raw_features)
         ]
 
         b = time.time() - b

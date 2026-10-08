@@ -224,31 +224,6 @@ def train(
 
                     save_path = save_step(args, model, optimizer, global_step, scheduler)
 
-                    flags = [
-                    '--tokenizer_name'         , args.model_name_or_path             ,
-                     '--input_file'             , args.valid_file                  ,
-                     '--split'                  , 'valid'                         ,
-                     '--do_lower_case'          ,
-                     '--model_path'             , str(save_path)              ,
-                     '--max_seq_length'         , str(args.max_source_seq_length + args.max_target_seq_length) if args.label_cpt_decodewithpos else str(args.max_source_seq_length)             ,
-                     '--max_tgt_length'         , str(args.max_target_seq_length)             ,
-                     '--batch_size'             , '32'                            ,
-                     '--beam_size'              , '1'                             ,
-                     '--length_penalty'         , '0'                             ,
-                     '--forbid_duplicate_ngrams',
-                     '--mode'                   , 's2s'                           ,
-                     '--forbid_ignore_word'     , '"."'                           ,
-                     '--cached_features_file'   , str(os.path.join(args.output_dir, "cached_features_for_valid.pt")),
-                     '--add_vocab_file'         , args.add_vocab_file]
-
-                    if args.softmax_label_only:
-                        flags.append('--softmax_label_only')
-                    if args.soft_label:
-                        flags.append('--soft_label')
-                    if args.soft_label_hier_real:
-                        flags.append('--soft_label_hier_real_with_train_file')
-                        flags.append(args.train_file)
-
                     out = test.main(HBGLTestingArguments(
                         tokenizer_name=args.model_name_or_path,
                         input_file=args.valid_file,

@@ -21,9 +21,9 @@ from transformers import BertConfig, BertTokenizer
 
 from args import HBGLTestingArguments, parse_to_testing_arguments
 from eval import evaluate
-from modeling_decoding import BertForSeq2SeqDecoder
+from modeling_decoding_v2 import BertForSeq2SeqDecoder
 import seq2seq_loader
-from utils import load_and_cache_examples, load_and_cache_examples_fast
+from utils import id_to_label_token, load_and_cache_examples, load_and_cache_examples_fast
 
 
 def whitespace_tokenize(text):
@@ -65,33 +65,26 @@ def main(args: HBGLTestingArguments):
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
     
-    tokenizer = BertTokenizer.from_pretrained(
+    tokenizer: BertTokenizer = BertTokenizer.from_pretrained(
         args.tokenizer_name, do_lower_case=args.do_lower_case,
         cache_dir=args.cache_dir if args.cache_dir else None)
+    assert isinstance(tokenizer.mask_token_id, int)
+    assert isinstance(tokenizer.sep_token_id, int)
+    assert isinstance(tokenizer.cls_token, str)
+    assert isinstance(tokenizer.sep_token, str)
+    assert isinstance(tokenizer.pad_token, str)
 
     if args.add_vocab_file:
         with open(args.add_vocab_file, 'rb') as f:
-            label_to_id_map = pickle.load(f)
+            label_to_id_map: dict[str, int] = pickle.load(f)
         labels_key = list(label_to_id_map.keys())
-        tokenizer.add_tokens([label_to_id_map[label] for label in labels_key])
-        add_token_num = len(labels_key)
+        tokenizer.add_tokens([id_to_label_token(label_to_id_map[label]) for label in labels_key])
 
-    if hasattr(tokenizer, 'model_max_length'):
-        tokenizer.model_max_length = args.max_seq_length
-    elif hasattr(tokenizer, 'max_len'):
-        tokenizer.max_len = args.max_seq_length
-
-    mask_word_id, eos_word_ids, sos_word_id = tokenizer.convert_tokens_to_ids(
-        [tokenizer.mask_token, tokenizer.sep_token, tokenizer.sep_token])
-    forbid_ignore_set = None
-    if args.forbid_ignore_word:
-        w_list = []
-        for w in args.forbid_ignore_word.split('|'):
-            if w.startswith('[') and w.endswith(']'):
-                w_list.append(w.upper())
-            else:
-                w_list.append(w)
-        forbid_ignore_set = set(tokenizer.convert_tokens_to_ids(w_list))
+    tokenizer.model_max_length = args.max_seq_length
+    mask_word_id = tokenizer.mask_token_id
+    eos_word_id = tokenizer.sep_token_id
+    sos_word_id = tokenizer.sep_token_id
+    forbid_ignore_set = None  # Dibuat kosong saja karena ... entah gunanya apa.
     print(args.model_path)
     found_checkpoint_flag = False
     for model_recover_path in glob.glob(args.model_path):
@@ -104,33 +97,38 @@ def main(args: HBGLTestingArguments):
         logger.info("Read decoding config from: %s" % config_file)
         config = BertConfig.from_json_file(config_file)
 
-        bi_uni_pipeline = []
-        bi_uni_pipeline.append(seq2seq_loader.Preprocess4Seq2seqDecoder(
-            tokenizer_vocab_words(tokenizer), tokenizer.convert_tokens_to_ids, args.max_seq_length,
-            max_tgt_length=args.max_tgt_length, pos_shift=args.pos_shift,
-            source_type_id=config.source_type_id, target_type_id=config.target_type_id,
-            cls_token=tokenizer.cls_token, sep_token=tokenizer.sep_token, pad_token=tokenizer.pad_token))
+        def indexer(tokens: list[str]) -> list[int]:
+            result = tokenizer.convert_tokens_to_ids(tokens)
+            assert isinstance(result, list)
+            return result
+
+        bi_uni_pipeline = [
+            seq2seq_loader.Preprocess4Seq2seqDecoder(
+                tokenizer_vocab_words(tokenizer), indexer, args.max_seq_length,
+                max_tgt_length=args.max_tgt_length, pos_shift=args.pos_shift,
+                source_type_id=config.source_type_id, target_type_id=config.target_type_id,
+                cls_token=tokenizer.cls_token, sep_token=tokenizer.sep_token, pad_token=tokenizer.pad_token
+            )
+        ]
 
         found_checkpoint_flag = True
         model = BertForSeq2SeqDecoder.from_pretrained(
             model_recover_path, config=config, mask_word_id=mask_word_id, search_beam_size=args.beam_size,
-            length_penalty=args.length_penalty, eos_id=eos_word_ids, sos_id=sos_word_id,
+            length_penalty=args.length_penalty, eos_id=eos_word_id, sos_id=sos_word_id,
             forbid_duplicate_ngrams=args.forbid_duplicate_ngrams, forbid_ignore_set=forbid_ignore_set,
             ngram_size=args.ngram_size, min_len=args.min_len, mode=args.mode,
             pos_shift=args.pos_shift,
         )
 
         if args.softmax_label_only and args.add_vocab_file:
-            label_tokens_start_index = model.bert.embeddings.word_embeddings.num_embeddings - add_token_num
-            model.label_start_index = label_tokens_start_index
+            model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
 
         if args.soft_label:
             model.soft_label = args.soft_label
-            label_tokens_start_index = model.bert.embeddings.word_embeddings.num_embeddings - add_token_num
-            model.label_start_index = label_tokens_start_index
+            model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
 
             if args.soft_label_hier_real_with_train_file:
-                prepare_hier_labels(args, tokenizer, model)
+                prepare_hier_labels(args, tokenizer, model)  # Is this even used?
 
         model.to(device)  # type: ignore
         if torch.cuda.device_count() > 1:
@@ -172,7 +170,13 @@ def main(args: HBGLTestingArguments):
     if not found_checkpoint_flag:
         logger.info("Not found the model checkpoint file!")
 
-def get_outputs(args, device, tokenizer, bi_uni_pipeline, model):
+def get_outputs(
+        args: HBGLTestingArguments,
+        device: torch.device,
+        tokenizer: BertTokenizer,
+        bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
+        model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
+):
     torch.cuda.empty_cache()
     model.eval()
     next_i = 0
@@ -190,23 +194,27 @@ def get_outputs(args, device, tokenizer, bi_uni_pipeline, model):
                 args.input_file, tokenizer, local_rank=-1,
                 cached_features_file=args.cached_features_file, shuffle=False, eval_mode=True)
 
-    input_lines = []
+    input_lines: list[list[str]] = []
     for line in to_pred:
-        input_lines.append(tokenizer.convert_ids_to_tokens(line.source_ids)[:max_src_length])
+        tokens = tokenizer.convert_ids_to_tokens(line.source_ids)[:max_src_length]
+        assert isinstance(tokens, list)
+        input_lines.append(tokens)
     if args.subset > 0:
         logger.info("Decoding subset: %d", args.subset)
         input_lines = input_lines[:args.subset]
 
-    input_lines = sorted(list(enumerate(input_lines)),
-                             key=lambda x: -len(x[1]))
-    output_lines = [""] * len(input_lines)
-    total_batch = math.ceil(len(input_lines) / args.batch_size)
+    input_lines_with_indices = sorted(
+        list(enumerate(input_lines)),
+        key=lambda x: -len(x[1])
+    )
+    output_lines = [""] * len(input_lines_with_indices)
+    total_batch = math.ceil(len(input_lines_with_indices) / args.batch_size)
 
     with tqdm(total=total_batch) as pbar:
         batch_count = 0
         first_batch = True
-        while next_i < len(input_lines):
-            _chunk = input_lines[next_i:next_i + args.batch_size]
+        while next_i < len(input_lines_with_indices):
+            _chunk = input_lines_with_indices[next_i:next_i + args.batch_size]
             buf_id = [x[0] for x in _chunk]
             buf = [x[1] for x in _chunk]
             next_i += args.batch_size
@@ -217,8 +225,9 @@ def get_outputs(args, device, tokenizer, bi_uni_pipeline, model):
                 for proc in bi_uni_pipeline:
                     instances.append(proc(instance))
             with torch.no_grad():
+                # Checkpoint~
                 batch = seq2seq_loader.batch_list_to_batch_tensors(
-                        instances)
+                        instances)  # Check batch result
                 batch = [
                         t.to(device) if t is not None else None for t in batch]
                 input_ids, token_type_ids, position_ids, input_mask, mask_qkv, task_idx = batch
@@ -264,7 +273,7 @@ def setup_seed(args):
         if n_gpu > 0:
             torch.cuda.manual_seed_all(args.seed)
 
-def tokenizer_vocab_words(tokenizer):
+def tokenizer_vocab_words(tokenizer: BertTokenizer):
     max_id = max(tokenizer.vocab.values())
     vocab_words = [f"[unused{id}]" for id in range(max_id + 1)]
     for token, id in tokenizer.vocab.items():

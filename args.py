@@ -213,6 +213,7 @@ class HBGLTestingArguments:
     # Required parameters
     model_path: str
     tokenizer_name: str
+    input_file: str
 
     # Other parameters
     config_path: str | None = None
@@ -220,7 +221,6 @@ class HBGLTestingArguments:
 
     ## Decoding parameters
     no_cuda: bool = False
-    input_file: str | None = None
     subset: int = 0
     output_file: str | None = None
     split: str = ''
@@ -254,12 +254,14 @@ def parse_to_testing_arguments(args=None):
     # Required parameters
     parser.add_argument("--model_path", default=None, type=str, required=True,
                         help="Path to the model checkpoint.")
+    parser.add_argument("--tokenizer_name", default=None, type=str, required=True,
+                        help="tokenizer name")
+    parser.add_argument("--input_file", default=None, type=str, required=True,
+                        help="Input file")
+    
     parser.add_argument("--config_path", default=None, type=str,
                         help="Path to config.json for the model.")
 
-    # tokenizer_name
-    parser.add_argument("--tokenizer_name", default=None, type=str, required=True,
-                        help="tokenizer name")
     parser.add_argument("--max_seq_length", default=512, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                             "Sequences longer than this will be truncated, and sequences shorter \n"
@@ -268,7 +270,6 @@ def parse_to_testing_arguments(args=None):
     # decoding parameters
     parser.add_argument('--no_cuda', action='store_true',
                         help="Whether to use CUDA for decoding")
-    parser.add_argument("--input_file", type=str, help="Input file")
     parser.add_argument('--subset', type=int, default=0,
                         help="Decode a subset of the input dataset.")
     parser.add_argument("--output_file", type=str, help="output file")

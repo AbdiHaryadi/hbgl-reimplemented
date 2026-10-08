@@ -1,5 +1,6 @@
 from random import randint
 import logging
+from typing import Callable
 import torch
 
 
@@ -12,6 +13,7 @@ def get_random_word(vocab_words):
 
 
 def batch_list_to_batch_tensors(batch):
+    # Potentially redundant, except for None handling.
     batch_tensors = []
     for x in zip(*batch):
         if x[0] is None:
@@ -21,26 +23,6 @@ def batch_list_to_batch_tensors(batch):
         else:
             batch_tensors.append(torch.tensor(x, dtype=torch.long))
     return batch_tensors
-
-
-def _get_word_split_index(tokens, st, end):
-    split_idx = []
-    i = st
-    while i < end:
-        if (not tokens[i].startswith('##')) or (i == st):
-            split_idx.append(i)
-        i += 1
-    split_idx.append(end)
-    return split_idx
-
-
-def _expand_whole_word(tokens, st, end):
-    new_st, new_end = st, end
-    while (new_st >= 0) and tokens[new_st].startswith('##'):
-        new_st -= 1
-    while (new_end < len(tokens)) and tokens[new_end].startswith('##'):
-        new_end += 1
-    return new_st, new_end
 
 
 class Pipeline():
@@ -69,9 +51,20 @@ class Pipeline():
 class Preprocess4Seq2seqDecoder(Pipeline):
     """ Pre-processing steps for pretraining transformer """
 
-    def __init__(self, vocab_words, indexer, max_len=512, max_tgt_length=128, 
-                 mode="s2s", pos_shift=False, source_type_id=0, target_type_id=1, 
-                 cls_token='[CLS]', sep_token='[SEP]', pad_token='[PAD]'):
+    def __init__(
+            self,
+            vocab_words: list[str],
+            indexer: Callable[[list[str]], list[int]],
+            max_len: int = 512,
+            max_tgt_length: int = 128,
+            mode: str = "s2s",
+            pos_shift: bool = False,
+            source_type_id: int = 0,
+            target_type_id: int = 1, 
+            cls_token: str = '[CLS]',
+            sep_token: str = '[SEP]',
+            pad_token: str = '[PAD]',
+    ):
         super().__init__()
         self.max_len = max_len
         self.vocab_words = vocab_words  # vocabulary (sub)words
@@ -95,7 +88,7 @@ class Preprocess4Seq2seqDecoder(Pipeline):
 
         self.cc = 0
 
-    def __call__(self, instance):
+    def __call__(self, instance: tuple[list[str], int]):
         tokens_a, max_a_len = instance
 
         padded_tokens_a = [self.cls_token] + tokens_a
@@ -114,7 +107,7 @@ class Preprocess4Seq2seqDecoder(Pipeline):
 
         mask_qkv = None
 
-        position_ids = []
+        position_ids: list[int] = []
         for i in range(len(tokens_a) + self.delta):
             position_ids.append(i)
         for i in range(len(tokens_a) + self.delta, max_a_len + self.delta):
