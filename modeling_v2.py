@@ -73,7 +73,12 @@ class BertPreTrainedForSeq2SeqModel(BertPreTrainedModel):
 
         return super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
 
-def relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
+def relative_position_bucket(
+        relative_position: torch.Tensor,
+        bidirectional: bool = True,
+        num_buckets: int = 32,
+        max_distance: int = 128
+):
     """
     Adapted from Mesh Tensorflow:
     https://github.com/tensorflow/mesh/blob/0cb87fe07da627bf0b7e60475d59f95ed6b5be3d/mesh_tensorflow/transformer/transformer_layers.py#L593
@@ -231,6 +236,7 @@ class HBGLBertLayer(nn.Module):
         return outputs
 
 class HBGLBertEncoder(nn.Module):
+    # TODO: Combine with HBGLBertEncoderForDecoding
     def __init__(self, config):
         super(HBGLBertEncoder, self).__init__()
         self.output_attentions = config.output_attentions

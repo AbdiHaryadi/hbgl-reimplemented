@@ -11,18 +11,17 @@ def get_random_word(vocab_words):
     i = randint(0, len(vocab_words)-1)
     return vocab_words[i]
 
+Preprocess4Seq2seqDecoderOutputType = tuple[list[int], list[int], list[int], torch.Tensor, None, int]
 
-def batch_list_to_batch_tensors(batch):
-    # Potentially redundant, except for None handling.
-    batch_tensors = []
-    for x in zip(*batch):
-        if x[0] is None:
-            batch_tensors.append(None)
-        elif isinstance(x[0], torch.Tensor):
-            batch_tensors.append(torch.stack(x))
-        else:
-            batch_tensors.append(torch.tensor(x, dtype=torch.long))
-    return batch_tensors
+def batch_list_to_batch_tensors_for_testing(batch: list[Preprocess4Seq2seqDecoderOutputType]):
+    return (
+        torch.tensor([x[0] for x in batch], dtype=torch.long),
+        torch.tensor([x[1] for x in batch], dtype=torch.long),
+        torch.tensor([x[2] for x in batch], dtype=torch.long),
+        torch.stack([x[3] for x in batch]),
+        None,
+        torch.tensor([x[2] for x in batch], dtype=torch.long),
+    )
 
 
 class Pipeline():
@@ -88,7 +87,7 @@ class Preprocess4Seq2seqDecoder(Pipeline):
 
         self.cc = 0
 
-    def __call__(self, instance: tuple[list[str], int]):
+    def __call__(self, instance: tuple[list[str], int]) -> Preprocess4Seq2seqDecoderOutputType:
         tokens_a, max_a_len = instance
 
         padded_tokens_a = [self.cls_token] + tokens_a

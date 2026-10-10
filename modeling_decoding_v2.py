@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import copy
 import math
 import logging
 import numpy as np
@@ -12,14 +13,212 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from transformers.models.bert.modeling_bert import BertModel, BertOnlyMLMHead, BertPreTrainedModel
+from transformers.models.bert.modeling_bert import BertLayer, BertOnlyMLMHead, BertPooler, BertPreTrainedModel
 
-from modeling import relative_position_bucket
+from modeling_v2 import BertLayerNorm, relative_position_bucket
 
 logger = logging.getLogger(__name__)
 
+class HBGLBertEncoderForDecoding(nn.Module):
+    def __init__(self, config):
+        super(HBGLBertEncoderForDecoding, self).__init__()
+        layer = BertLayer(config)
+        self.layer = nn.ModuleList([copy.deepcopy(layer)
+                                    for _ in range(config.num_hidden_layers)])
 
-class BertModelIncr(BertModel):
+    def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True, 
+                prev_embedding=None, prev_encoded_layers=None, mask_qkv=None, 
+                seg_ids=None, key_history=None, value_history=None, rel_pos=None):
+        # history embedding and encoded layer must be simultanously given
+        assert (prev_embedding is None) == (prev_encoded_layers is None)
+
+        all_encoder_layers = []
+        if (prev_embedding is not None) and (prev_encoded_layers is not None):
+            history_states = prev_embedding
+            for i, layer_module in enumerate(self.layer):
+                hidden_states = layer_module(
+                    hidden_states, attention_mask, history_states=history_states, 
+                    mask_qkv=mask_qkv, seg_ids=seg_ids, rel_pos=rel_pos)
+                if output_all_encoded_layers:
+                    all_encoder_layers.append(hidden_states)
+                if prev_encoded_layers is not None:
+                    history_states = prev_encoded_layers[i]
+        else:
+            for i, layer_module in enumerate(self.layer):
+                set_key = None
+                if isinstance(key_history, list):
+                    set_key = key_history if len(key_history) < len(self.layer) else key_history[i]
+                set_value = None
+                if isinstance(value_history, list):
+                    assert key_history is not None
+                    set_value = value_history if len(key_history) < len(self.layer) else value_history[i]
+                hidden_states = layer_module(
+                    hidden_states, attention_mask, mask_qkv=mask_qkv, seg_ids=seg_ids,
+                    key_history=set_key, value_history=set_value, rel_pos=rel_pos)
+                if output_all_encoded_layers:
+                    all_encoder_layers.append(hidden_states)
+        if not output_all_encoded_layers:
+            all_encoder_layers.append(hidden_states)
+        return all_encoder_layers
+
+
+class HBGLBertEmbeddingsForDecoding(nn.Module):
+    """Construct the embeddings from word, position and token_type embeddings.
+    """
+
+    def __init__(self, config):
+        super(HBGLBertEmbeddingsForDecoding, self).__init__()
+        self.word_embeddings = nn.Embedding(
+            config.vocab_size, config.hidden_size)
+        if config.type_vocab_size == 0:
+            self.token_type_embeddings = None
+        else:
+            self.token_type_embeddings = nn.Embedding(
+                config.type_vocab_size, config.hidden_size)
+        if hasattr(config, 'fp32_embedding'):
+            self.fp32_embedding = config.fp32_embedding
+        else:
+            self.fp32_embedding = False
+
+        if hasattr(config, 'new_pos_ids') and config.new_pos_ids:
+            self.num_pos_emb = 4
+        else:
+            self.num_pos_emb = 1
+        self.position_embeddings = nn.Embedding(
+            config.max_position_embeddings, config.hidden_size * self.num_pos_emb)
+
+        # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
+        # any TensorFlow checkpoint file
+        self.LayerNorm = BertLayerNorm(config.hidden_size, eps=1e-5)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(
+            self,
+            input_ids: torch.Tensor | None,
+            token_type_ids: torch.Tensor | None = None,
+            position_ids: torch.Tensor | None = None,
+            task_idx: torch.Tensor | None = None,
+            inputs_embeds: torch.Tensor | None = None
+    ):
+        if position_ids is None:
+            raise NotImplementedError("Not handled yet")
+        
+        if token_type_ids is None:
+            assert input_ids is not None
+            token_type_ids = torch.zeros_like(input_ids)
+
+        if input_ids is not None:
+            words_embeddings: torch.Tensor = self.word_embeddings(input_ids)
+        elif inputs_embeds is not None:
+            words_embeddings = inputs_embeds
+        else:
+            raise ValueError("Either input_ids or input_embeds should not be None.")
+
+        position_embeddings: torch.Tensor = self.position_embeddings(position_ids)
+
+        if self.num_pos_emb > 1:
+            num_batch = position_embeddings.size(0)
+            num_pos = position_embeddings.size(1)
+            position_embeddings = position_embeddings.view(
+                num_batch, num_pos, self.num_pos_emb, -1)[torch.arange(0, num_batch).long(), :, task_idx, :]
+
+        embeddings = words_embeddings + position_embeddings
+
+        if self.token_type_embeddings is not None:
+            embeddings: torch.Tensor = embeddings + self.token_type_embeddings(token_type_ids)
+
+        if self.fp32_embedding:
+            embeddings = embeddings.half()
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
+
+class HBGLBertModelForDecoding(BertPreTrainedModel):
+    """BERT model ("Bidirectional Embedding Representations from a Transformer").
+    Params:
+        config: a BertConfig class instance with the configuration to build a new model
+    Inputs:
+        `input_ids`: a torch.LongTensor of shape [batch_size, sequence_length]
+            with the word token indices in the vocabulary(see the tokens preprocessing logic in the scripts
+            `extract_features.py`, `run_classifier.py` and `run_squad.py`)
+        `token_type_ids`: an optional torch.LongTensor of shape [batch_size, sequence_length] with the token
+            types indices selected in [0, 1]. Type 0 corresponds to a `sentence A` and type 1 corresponds to
+            a `sentence B` token (see BERT paper for more details).
+        `attention_mask`: an optional torch.LongTensor of shape [batch_size, sequence_length] with indices
+            selected in [0, 1]. It's a mask to be used if the input sequence length is smaller than the max
+            input sequence length in the current batch. It's the mask that we typically use for attention when
+            a batch has varying length sentences.
+        `output_all_encoded_layers`: boolean which controls the content of the `encoded_layers` output as described below. Default: `True`.
+    Outputs: Tuple of (encoded_layers, pooled_output)
+        `encoded_layers`: controled by `output_all_encoded_layers` argument:
+            - `output_all_encoded_layers=True`: outputs a list of the full sequences of encoded-hidden-states at the end
+                of each attention block (i.e. 12 full sequences for BERT-base, 24 for BERT-large), each
+                encoded-hidden-state is a torch.FloatTensor of size [batch_size, sequence_length, hidden_size],
+            - `output_all_encoded_layers=False`: outputs only the full sequence of hidden-states corresponding
+                to the last attention block of shape [batch_size, sequence_length, hidden_size],
+        `pooled_output`: a torch.FloatTensor of size [batch_size, hidden_size] which is the output of a
+            classifier pretrained on top of the hidden state associated to the first character of the
+            input (`CLF`) to train on the Next-Sentence task (see BERT's paper).
+    ```
+    """
+
+    def __init__(self, config):
+        super(HBGLBertModelForDecoding, self).__init__(config)
+        self.embeddings = HBGLBertEmbeddingsForDecoding(config)
+        self.encoder = HBGLBertEncoderForDecoding(config)
+        self.pooler = BertPooler(config)
+        self.config = config
+
+    def rescale_some_parameters(self):
+        raise NotImplementedError("Is this even called?")
+
+    def get_extended_attention_mask(self, input_ids, token_type_ids, attention_mask):
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        if token_type_ids is None:
+            token_type_ids = torch.zeros_like(input_ids)
+
+        # We create a 3D attention mask from a 2D tensor mask.
+        # Sizes are [batch_size, 1, 1, to_seq_length]
+        # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
+        # this attention mask is more simple than the triangular masking of causal attention
+        # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
+        if attention_mask.dim() == 2:
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        elif attention_mask.dim() == 3:
+            extended_attention_mask = attention_mask.unsqueeze(1)
+        else:
+            raise NotImplementedError
+
+        # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+        # masked positions, this operation will create a tensor which is 0.0 for
+        # positions we want to attend and -10000.0 for masked positions.
+        # Since we are adding it to the raw scores before the softmax, this is
+        # effectively the same as removing these entirely.
+        #extended_attention_mask = extended_attention_mask.to(
+            #dtype=next(self.parameters()).dtype)  # fp16 compatibility
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        return extended_attention_mask
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, output_all_encoded_layers=True,
+                mask_qkv=None, task_idx=None, key_history=None, value_history=None, position_ids=None):
+        extended_attention_mask = self.get_extended_attention_mask(
+            input_ids, token_type_ids, attention_mask)
+
+        embedding_output = self.embeddings(
+            input_ids, token_type_ids, task_idx=task_idx, position_ids=position_ids)
+        encoded_layers = self.encoder(embedding_output, extended_attention_mask,
+                                      output_all_encoded_layers=output_all_encoded_layers,
+                                      mask_qkv=mask_qkv, seg_ids=token_type_ids,
+                                      key_history=key_history, value_history=value_history)
+        sequence_output = encoded_layers[-1]
+        pooled_output = self.pooler(sequence_output)
+        if not output_all_encoded_layers:
+            encoded_layers = encoded_layers[-1]
+        return encoded_layers, pooled_output
+
+
+class BertModelIncr(HBGLBertModelForDecoding):
     def __init__(self, config):
         super(BertModelIncr, self).__init__(config)
         self.pooler = None  # We don't care about the pooler.
@@ -37,7 +236,7 @@ class BertModelIncr(BertModel):
         extended_attention_mask = self.get_extended_attention_mask(
             input_ids, token_type_ids, attention_mask)
 
-        embedding_output = self.embeddings(
+        embedding_output: torch.Tensor = self.embeddings(
             input_ids, token_type_ids, position_ids, task_idx=task_idx, inputs_embeds=inputs_embeds)
 
         if self.rel_pos_bias is not None and rel_pos is not None:
@@ -48,7 +247,7 @@ class BertModelIncr(BertModel):
             # print("Rel pos size = %s" % str(rel_pos.size()))
         else:
             rel_pos = None
-        encoded_layers = self.encoder(embedding_output,
+        encoded_layers: list[torch.Tensor] | torch.Tensor = self.encoder(embedding_output,
                                       extended_attention_mask,
                                       output_all_encoded_layers=output_all_encoded_layers,
                                       prev_embedding=prev_embedding,
@@ -97,16 +296,22 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         self.post_init()
 
-    def forward(self, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None, mask_qkv=None):
+    def forward(
+            self,
+            input_ids: torch.Tensor,
+            token_type_ids: torch.Tensor,
+            position_ids: torch.Tensor,
+            attention_mask: torch.Tensor,
+            task_idx: torch.Tensor | None = None,
+            mask_qkv: torch.Tensor | None = None,
+    ):
         if self.search_beam_size > 1:
             return self.beam_search(input_ids, token_type_ids, position_ids, attention_mask,
                                     task_idx=task_idx, mask_qkv=mask_qkv)
 
-        input_shape = list(input_ids.size())
-        batch_size = input_shape[0]
-        input_length = input_shape[1]
-        output_shape = list(token_type_ids.size())
-        output_length = output_shape[1]
+        batch_size = input_ids.size(dim=0)
+        input_length = input_ids.size(dim=1)
+        output_length = token_type_ids.size(dim=1)
 
         output_ids = []
         prev_embedding = None
@@ -128,7 +333,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         while next_pos < output_length:
             if self.soft_label and curr_ids is None and pred_embeds is not None:
                 # set curr_ids to None in two more loops
-                curr_length = pred_embeds.size()[1]
+                curr_length = pred_embeds.size(dim=1)
                 if self.pos_shift:
                     if next_pos == input_length:
                         x_input_embeds = torch.cat((pred_embeds,
@@ -180,6 +385,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                     self.bert(x_input_ids, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                             output_all_encoded_layers=True, prev_embedding=prev_embedding,
                             prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos)
+            assert isinstance(new_embedding, torch.Tensor)
 
             last_hidden = new_encoded_layers[-1][:, -1:, :]
             if self.soft_label:

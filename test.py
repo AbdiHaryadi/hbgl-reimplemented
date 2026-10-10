@@ -220,19 +220,21 @@ def get_outputs(
             next_i += args.batch_size
             batch_count += 1
             max_a_len = max([len(x) for x in buf])
-            instances = []
+            instances: list[seq2seq_loader.Preprocess4Seq2seqDecoderOutputType] = []
             for instance in [(x, max_a_len) for x in buf]:
                 for proc in bi_uni_pipeline:
                     instances.append(proc(instance))
             with torch.no_grad():
                 # Checkpoint~
-                batch = seq2seq_loader.batch_list_to_batch_tensors(
-                        instances)  # Check batch result
-                batch = [
-                        t.to(device) if t is not None else None for t in batch]
-                input_ids, token_type_ids, position_ids, input_mask, mask_qkv, task_idx = batch
-                traces = model(input_ids, token_type_ids,
-                                   position_ids, input_mask, task_idx=task_idx, mask_qkv=mask_qkv)
+                input_ids, token_type_ids, position_ids, input_mask, _, task_idx = seq2seq_loader.batch_list_to_batch_tensors_for_testing(instances)  # Check batch result
+                traces = model(
+                    input_ids=input_ids.to(device),
+                    token_type_ids=token_type_ids.to(device),
+                    position_ids=position_ids.to(device),
+                    attention_mask=input_mask.to(device),
+                    task_idx=task_idx.to(device)
+                )
+
                 if args.beam_size > 1:
                     traces = {k: v.tolist() for k, v in traces.items()}
                     output_ids = traces['pred_seq']

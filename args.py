@@ -214,6 +214,7 @@ class HBGLTestingArguments:
     model_path: str
     tokenizer_name: str
     input_file: str
+    add_vocab_file: str
 
     # Other parameters
     config_path: str | None = None
@@ -242,7 +243,6 @@ class HBGLTestingArguments:
     s2s_share_segment: bool = False
     pos_shift: bool = False
     cache_dir: str | None = None
-    add_vocab_file: str | None = None
     cached_features_file: str | None = None
     softmax_label_only: bool = False
     soft_label: bool = False
@@ -258,6 +258,7 @@ def parse_to_testing_arguments(args=None):
                         help="tokenizer name")
     parser.add_argument("--input_file", default=None, type=str, required=True,
                         help="Input file")
+    parser.add_argument("--add_vocab_file", type=str, default=None, required=True)
     
     parser.add_argument("--config_path", default=None, type=str,
                         help="Path to config.json for the model.")
@@ -307,7 +308,6 @@ def parse_to_testing_arguments(args=None):
                         help="Using position shift for fine-tuning.")
     parser.add_argument("--cache_dir", default=None, type=str,
                         help="Where do you want to store the pre-trained models downloaded from s3")
-    parser.add_argument("--add_vocab_file", type=str, default=None)
     parser.add_argument("--cached_features_file", type=str, default=None)
     parser.add_argument('--softmax_label_only', action='store_true')
     parser.add_argument('--soft_label', action='store_true')

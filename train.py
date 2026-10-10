@@ -96,6 +96,7 @@ def train(
     - tb_writer (involving SummaryWriter, idk what is it)
     - args.fp16 (amp)
     """
+    assert args.add_vocab_file is not None
 
     # model recover
     recover_step = get_max_epoch_model(args.output_dir)
