@@ -57,6 +57,9 @@ def test(
         best_macro_f1_path: str | None,
         best_micro_f1_path: str | None
 ):
+    assert args.test_file is not None
+    assert args.add_vocab_file is not None
+    
     bout = None
     for i, save_path in enumerate([best_micro_f1_path, best_macro_f1_path]):
         if save_path is None: continue

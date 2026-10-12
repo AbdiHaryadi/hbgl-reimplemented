@@ -4,16 +4,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import argparse
 import glob
 import json
 import logging
 import math
 import os
 import pickle
-import random
 
-import numpy as np
 from tqdm import tqdm
 
 import torch
@@ -24,23 +21,6 @@ from eval import evaluate
 from modeling_decoding_v2 import BertForSeq2SeqDecoder
 import seq2seq_loader
 from utils import id_to_label_token, load_and_cache_examples, load_and_cache_examples_fast
-
-
-def whitespace_tokenize(text):
-    """
-    Source: https://huggingface.co/transformers/v3.2.0/_modules/transformers/tokenization_bert.html
-
-    Runs basic whitespace cleaning and splitting on a piece of text.
-    """
-    text = text.strip()
-    if not text:
-        return []
-    tokens = text.split()
-    return tokens
-
-class WhitespaceTokenizer(object):
-    def tokenize(self, text):
-        return whitespace_tokenize(text)
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -153,16 +133,22 @@ def main(args: HBGLTestingArguments):
             except:
                 return 0
 
-        predict_labels = [i.replace("\n", '').split(' ') for i in output_lines]
+        predict_labels = [
+            (label_str.split(' ') if label_str else []) for label_str in
+            [i.replace("\n", '') for i in output_lines]
+        ]
         predict_labels = [list(set([token_to_id(j) for j  in i])) for i in predict_labels]
         with open(args.input_file) as f:
-            gd_labels = [json.loads(i)['tgt'] for i in f]
-            gd_labels = [[token_to_id(j) for j  in i.split(' ')] for i in gd_labels]
+            ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
 
         with open(args.add_vocab_file, 'rb') as f:
             label_to_id_map = pickle.load(f)
-        id2label = {token_to_id(label_to_id_map[k]): k for k in label_to_id_map}
-        out = evaluate(predict_labels, gd_labels, id2label, as_sample=True)
+        id2label = {v: k for k, v in label_to_id_map.items()}
+        out = evaluate(
+            epoch_predicts=predict_labels,
+            epoch_labels=ground_labels,
+            id2label=id2label,
+        )
         del out['full']
         print(out)
         return out
@@ -225,7 +211,6 @@ def get_outputs(
                 for proc in bi_uni_pipeline:
                     instances.append(proc(instance))
             with torch.no_grad():
-                # Checkpoint~
                 input_ids, token_type_ids, position_ids, input_mask, _, task_idx = seq2seq_loader.batch_list_to_batch_tensors_for_testing(instances)  # Check batch result
                 traces = model(
                     input_ids=input_ids.to(device),
@@ -257,23 +242,6 @@ def get_outputs(
             pbar.update(1)
             first_batch = False
     return output_lines
-
-def setup_seed(args):
-    n_gpu = torch.cuda.device_count()
-    if args.seed > 0:
-        random.seed(args.seed)
-        np.random.seed(args.seed)
-        torch.manual_seed(args.seed)
-        if n_gpu > 0:
-            torch.cuda.manual_seed_all(args.seed)
-    else:
-        random_seed = random.randint(0, 10000)
-        logger.info("Set random seed as: {}".format(random_seed))
-        random.seed(random_seed)
-        np.random.seed(random_seed)
-        torch.manual_seed(random_seed)
-        if n_gpu > 0:
-            torch.cuda.manual_seed_all(args.seed)
 
 def tokenizer_vocab_words(tokenizer: BertTokenizer):
     max_id = max(tokenizer.vocab.values())

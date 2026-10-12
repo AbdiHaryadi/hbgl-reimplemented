@@ -237,7 +237,10 @@ def train(
                             else args.max_source_seq_length
                         ),
                         max_tgt_length=args.max_target_seq_length,
-                        batch_size=args.per_gpu_train_batch_size,  # Original: 32, but let's change it to per_gpu_train_batch_size
+                        # Original: 32
+                        # Changing it to per_gpu_train_batch_size still CUDAOutOfMemoryError
+                        # Let's test it only with one.
+                        batch_size=args.per_gpu_train_batch_size,  
                         beam_size=1,
                         length_penalty=0,
                         forbid_duplicate_ngrams=True,
@@ -266,7 +269,7 @@ def train(
                                 try:
                                     shutil.rmtree(best_macro_f1_path)
                                 except:
-                                    pass
+                                    print(f"Warning: Trying to remove macro path {best_macro_f1_path}, but can't")
                             best_macro_f1_path = save_path
                             keep_save_model = True
 
@@ -276,7 +279,7 @@ def train(
                                 try:
                                     shutil.rmtree(best_micro_f1_path)
                                 except:
-                                    pass
+                                    print(f"Warning: Trying to remove macro path {best_micro_f1_path}, but can't")
                             best_micro_f1_path = save_path
                             keep_save_model = True
 
