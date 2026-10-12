@@ -5,7 +5,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import copy
 import math
 import logging
 import numpy as np
@@ -13,22 +12,161 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from transformers.models.bert.modeling_bert import BertLayer, BertOnlyMLMHead, BertPooler, BertPreTrainedModel
+from transformers.models.bert.modeling_bert import BertIntermediate, BertOnlyMLMHead, BertOutput, BertPooler, BertPreTrainedModel, BertSelfOutput
 
 from modeling_v2 import BertLayerNorm, relative_position_bucket
 
 logger = logging.getLogger(__name__)
 
+def log_variable(var_name: str, var_value):
+    if isinstance(var_value, torch.Tensor):
+        print(f"{var_name} ({type(var_value)}): {var_value.size()}")
+    else:
+        print(f"{var_name} ({type(var_value)}): {var_value}")
+
+class HBGLBertSelfAttentionForDecoding(nn.Module):
+    def __init__(self, config):
+        super(HBGLBertSelfAttentionForDecoding, self).__init__()
+        if config.hidden_size % config.num_attention_heads != 0:
+            raise ValueError(
+                "The hidden size (%d) is not a multiple of the number of attention "
+                "heads (%d)" % (config.hidden_size, config.num_attention_heads))
+
+        self.num_attention_heads = config.num_attention_heads
+        self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        self.query = nn.Linear(config.hidden_size, self.all_head_size)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size)
+
+        self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+
+    def transpose_for_scores(self, x):
+        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        x = x.view(*new_x_shape)
+        return x.permute(0, 2, 1, 3)
+
+    def forward(self, hidden_states, attention_mask, history_states=None,
+                key_history=None, value_history=None,
+                key_cache=None, value_cache=None, rel_pos=None):
+        mixed_query_layer = self.query(hidden_states)
+
+        if history_states is None:
+            # possible issue: https://github.com/NVIDIA/apex/issues/131
+            mixed_key_layer = F.linear(hidden_states, self.key.weight)
+            mixed_value_layer = self.value(hidden_states)
+        else:
+            x_states = torch.cat((history_states, hidden_states), dim=1)
+            # possible issue: https://github.com/NVIDIA/apex/issues/131
+            mixed_key_layer = F.linear(x_states, self.key.weight)
+            mixed_value_layer = self.value(x_states)
+
+        if key_cache is not None and isinstance(key_cache, list):
+            key_cache.append(mixed_key_layer)
+            mixed_key_layer = torch.cat(key_cache, dim=1)
+
+        if value_cache is not None and isinstance(value_cache, list):
+            value_cache.append(mixed_value_layer)
+            mixed_value_layer = torch.cat(value_cache, dim=1)
+
+        return self.multi_head_attention(
+            mixed_query_layer, mixed_key_layer, mixed_value_layer,
+            attention_mask, rel_pos=rel_pos,
+            key_history=key_history, value_history=value_history)
+
+    def multi_head_attention(self, query, key, value, attention_mask, rel_pos, key_history, value_history):
+        query_layer = self.transpose_for_scores(query)
+        key_layer = self.transpose_for_scores(key)
+        value_layer = self.transpose_for_scores(value)
+
+        if (
+            key_history is not None
+            and not isinstance(key_history, list)
+            and value_history is not None
+        ):
+            key_layer = torch.cat((key_history, key_layer), dim=-2)
+            value_layer = torch.cat((value_history, value_layer), dim=-2)
+
+        # Take the dot product between "query" and "key" to get the raw attention scores.
+        # (batch, head, pos, pos)
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        if attention_mask is not None:
+            # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+            attention_scores = attention_scores + attention_mask
+        if rel_pos is not None:
+            attention_scores = attention_scores + rel_pos
+
+        # Normalize the attention scores to probabilities.
+        attention_probs = nn.Softmax(dim=-1)(attention_scores)
+
+        # There was a debug implementation here, but I skipped.
+
+        # This is actually dropping out entire tokens to attend to, which might
+        # seem a bit unusual, but is taken from the original Transformer paper.
+        attention_probs = self.dropout(attention_probs)
+        context_layer = torch.matmul(attention_probs, value_layer)
+
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        context_layer = context_layer.view(*new_context_layer_shape)
+
+        if isinstance(key_history, list):
+            key_history.append(key_layer)
+        if isinstance(value_history, list):
+            value_history.append(value_layer)
+
+        return context_layer
+
+class HBGLBertAttentionForDecoding(nn.Module):
+    def __init__(self, config):
+        super(HBGLBertAttentionForDecoding, self).__init__()
+        self.self = HBGLBertSelfAttentionForDecoding(config)
+        self.output = BertSelfOutput(config)
+
+    def forward(self, input_tensor, attention_mask, history_states=None,
+                key_history=None, value_history=None, rel_pos=None):
+        self_output = self.self(
+            input_tensor, attention_mask, history_states=history_states,
+            key_history=key_history, value_history=value_history, rel_pos=rel_pos)
+        attention_output = self.output(self_output, input_tensor)
+        return attention_output
+
+class HBGLBertLayerForDecoding(nn.Module):
+    def __init__(self, config):
+        super(HBGLBertLayerForDecoding, self).__init__()
+        self.attention = HBGLBertAttentionForDecoding(config)
+        self.intermediate = BertIntermediate(config)
+        self.output = BertOutput(config)
+
+    def forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            history_states=None,
+            key_history=None,
+            value_history=None,
+            rel_pos=None
+    ):
+        attention_output = self.attention(
+            hidden_states, attention_mask, history_states=history_states,
+            key_history=key_history, value_history=value_history, rel_pos=rel_pos)
+        # log_variable("attention_output", attention_output)
+        
+        intermediate_output = self.intermediate(attention_output)
+        layer_output = self.output(intermediate_output, attention_output)
+        return layer_output
+
 class HBGLBertEncoderForDecoding(nn.Module):
     def __init__(self, config):
         super(HBGLBertEncoderForDecoding, self).__init__()
-        layer = BertLayer(config)
-        self.layer = nn.ModuleList([copy.deepcopy(layer)
+        self.layer = nn.ModuleList([HBGLBertLayerForDecoding(config)
                                     for _ in range(config.num_hidden_layers)])
 
     def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True, 
-                prev_embedding=None, prev_encoded_layers=None, mask_qkv=None, 
-                seg_ids=None, key_history=None, value_history=None, rel_pos=None):
+                prev_embedding=None, prev_encoded_layers=None, 
+                key_history=None, value_history=None, rel_pos=None):
         # history embedding and encoded layer must be simultanously given
         assert (prev_embedding is None) == (prev_encoded_layers is None)
 
@@ -38,7 +176,7 @@ class HBGLBertEncoderForDecoding(nn.Module):
             for i, layer_module in enumerate(self.layer):
                 hidden_states = layer_module(
                     hidden_states, attention_mask, history_states=history_states, 
-                    mask_qkv=mask_qkv, seg_ids=seg_ids, rel_pos=rel_pos)
+                    rel_pos=rel_pos)
                 if output_all_encoded_layers:
                     all_encoder_layers.append(hidden_states)
                 if prev_encoded_layers is not None:
@@ -53,7 +191,7 @@ class HBGLBertEncoderForDecoding(nn.Module):
                     assert key_history is not None
                     set_value = value_history if len(key_history) < len(self.layer) else value_history[i]
                 hidden_states = layer_module(
-                    hidden_states, attention_mask, mask_qkv=mask_qkv, seg_ids=seg_ids,
+                    hidden_states, attention_mask,
                     key_history=set_key, value_history=set_value, rel_pos=rel_pos)
                 if output_all_encoded_layers:
                     all_encoder_layers.append(hidden_states)
@@ -201,21 +339,8 @@ class HBGLBertModelForDecoding(BertPreTrainedModel):
         return extended_attention_mask
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, output_all_encoded_layers=True,
-                mask_qkv=None, task_idx=None, key_history=None, value_history=None, position_ids=None):
-        extended_attention_mask = self.get_extended_attention_mask(
-            input_ids, token_type_ids, attention_mask)
-
-        embedding_output = self.embeddings(
-            input_ids, token_type_ids, task_idx=task_idx, position_ids=position_ids)
-        encoded_layers = self.encoder(embedding_output, extended_attention_mask,
-                                      output_all_encoded_layers=output_all_encoded_layers,
-                                      mask_qkv=mask_qkv, seg_ids=token_type_ids,
-                                      key_history=key_history, value_history=value_history)
-        sequence_output = encoded_layers[-1]
-        pooled_output = self.pooler(sequence_output)
-        if not output_all_encoded_layers:
-            encoded_layers = encoded_layers[-1]
-        return encoded_layers, pooled_output
+                task_idx=None, key_history=None, value_history=None, position_ids=None):
+        raise NotImplementedError("It should be overrided by BertModelIncr")
 
 
 class BertModelIncr(HBGLBertModelForDecoding):
@@ -231,7 +356,7 @@ class BertModelIncr(HBGLBertModelForDecoding):
         self.post_init()
 
     def forward(self, input_ids, token_type_ids, position_ids, attention_mask, output_all_encoded_layers=True,
-                prev_embedding=None, prev_encoded_layers=None, mask_qkv=None, task_idx=None, rel_pos=None,
+                prev_embedding=None, prev_encoded_layers=None, task_idx=None, rel_pos=None,
                 inputs_embeds=None):
         extended_attention_mask = self.get_extended_attention_mask(
             input_ids, token_type_ids, attention_mask)
@@ -251,8 +376,8 @@ class BertModelIncr(HBGLBertModelForDecoding):
                                       extended_attention_mask,
                                       output_all_encoded_layers=output_all_encoded_layers,
                                       prev_embedding=prev_embedding,
-                                      prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv,
-                                      seg_ids=token_type_ids, rel_pos=rel_pos)
+                                      prev_encoded_layers=prev_encoded_layers,
+                                      rel_pos=rel_pos)
         if not output_all_encoded_layers:
             encoded_layers = encoded_layers[-1]
         return embedding_output, encoded_layers
@@ -303,11 +428,10 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             position_ids: torch.Tensor,
             attention_mask: torch.Tensor,
             task_idx: torch.Tensor | None = None,
-            mask_qkv: torch.Tensor | None = None,
     ):
         if self.search_beam_size > 1:
             return self.beam_search(input_ids, token_type_ids, position_ids, attention_mask,
-                                    task_idx=task_idx, mask_qkv=mask_qkv)
+                                    task_idx=task_idx)
 
         batch_size = input_ids.size(dim=0)
         input_length = input_ids.size(dim=1)
@@ -378,13 +502,13 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 new_embedding, new_encoded_layers = \
                     self.bert(None, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                             output_all_encoded_layers=True, prev_embedding=prev_embedding,
-                              prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos,
+                              prev_encoded_layers=prev_encoded_layers, rel_pos=cur_rel_pos,
                               inputs_embeds=x_input_embeds, )
             else:
                 new_embedding, new_encoded_layers = \
                     self.bert(x_input_ids, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                             output_all_encoded_layers=True, prev_embedding=prev_embedding,
-                            prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos)
+                            prev_encoded_layers=prev_encoded_layers, rel_pos=cur_rel_pos)
             assert isinstance(new_embedding, torch.Tensor)
 
             last_hidden = new_encoded_layers[-1][:, -1:, :]
@@ -521,7 +645,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         else:
             return torch.cat(output_ids, dim=1)
 
-    def beam_search(self, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None, mask_qkv=None):
+    def beam_search(self, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None):
         input_shape = list(input_ids.size())
         batch_size = input_shape[0]
         input_length = input_shape[1]
@@ -579,7 +703,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             new_embedding, new_encoded_layers = \
                 self.bert(x_input_ids, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                           output_all_encoded_layers=True, prev_embedding=prev_embedding,
-                          prev_encoded_layers=prev_encoded_layers, mask_qkv=mask_qkv, rel_pos=cur_rel_pos)
+                          prev_encoded_layers=prev_encoded_layers, rel_pos=cur_rel_pos)
 
             last_hidden = new_encoded_layers[-1][:, -1:, :]
             prediction_scores = self.cls(last_hidden)
@@ -681,8 +805,6 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 if rel_pos is not None:
                     rel_pos = first_expand(rel_pos)
                 mask_ids = first_expand(mask_ids)
-                if mask_qkv is not None:
-                    mask_qkv = first_expand(mask_qkv)
 
             if self.forbid_duplicate_ngrams:
                 wids = step_ids[-1].tolist()

@@ -237,7 +237,7 @@ def train(
                             else args.max_source_seq_length
                         ),
                         max_tgt_length=args.max_target_seq_length,
-                        batch_size=32,
+                        batch_size=args.per_gpu_train_batch_size,  # Original: 32, but let's change it to per_gpu_train_batch_size
                         beam_size=1,
                         length_penalty=0,
                         forbid_duplicate_ngrams=True,
