@@ -177,9 +177,8 @@ def train(
                         'num_source_tokens': batch[5],
                         'num_target_tokens': batch[6]}
 
-            if args.soft_label:
-                inputs['label_ids'] = inputs['label_ids'].float()
-                inputs['target_ids'] = inputs['target_ids'].float()
+            inputs['label_ids'] = inputs['label_ids'].float()
+            inputs['target_ids'] = inputs['target_ids'].float()
 
             if args.label_cpt_decodewithpos:
                 logger.info(f"I have no idea why there's a model.target_offset here. ({args.max_source_seq_length})")
@@ -229,7 +228,6 @@ def train(
                         tokenizer_name=args.model_name_or_path,
                         input_file=args.valid_file,
                         split="valid",
-                        do_lower_case=True,
                         model_path=save_path,
                         max_seq_length=(
                             args.max_source_seq_length + args.max_target_seq_length
@@ -241,18 +239,11 @@ def train(
                         # Changing it to per_gpu_train_batch_size still CUDAOutOfMemoryError
                         # Let's test it only with one.
                         batch_size=args.per_gpu_train_batch_size,  
-                        beam_size=1,
-                        length_penalty=0,
-                        forbid_duplicate_ngrams=True,
-                        mode="s2s",
-                        forbid_ignore_word='"."',
                         cached_features_file=os.path.join(
                             args.output_dir,
                             "cached_features_for_valid.pt"
                         ),
                         add_vocab_file=args.add_vocab_file,
-                        softmax_label_only=args.softmax_label_only,
-                        soft_label=args.soft_label,
                         soft_label_hier_real_with_train_file=(
                             args.train_file if args.soft_label_hier_real
                             else None
@@ -341,7 +332,7 @@ def create_train_dataset(
         target_mask_prob=args.target_mask_prob,
         mask_way=args.mask_way,
         num_max_mask_token=args.num_max_mask_token,
-        soft_label=args.soft_label,
+        soft_label=True,
     )
 
     logger.info("Check dataset:")
@@ -349,14 +340,11 @@ def create_train_dataset(
         source_ids, target_ids, _, _, _, _ = train_dataset[i]
         logger.info("Instance-%d" % i)
         logger.info("Source tokens = %s" % " ".join(tokenizer.convert_ids_to_tokens(source_ids)))
-        if args.soft_label:
-            real_target_ids = []
-            for i in range(target_ids.shape[0]):
-                real_target_ids.append(torch.arange(target_ids.shape[-1])[target_ids[i].bool()].tolist())
-            for rti in real_target_ids:
-                logger.info("Target tokens = %s" % " ".join(tokenizer.convert_ids_to_tokens(rti)))
-        else:
-            raise NotImplementedError("Not supported yet")
+        real_target_ids = []
+        for i in range(target_ids.shape[0]):
+            real_target_ids.append(torch.arange(target_ids.shape[-1])[target_ids[i].bool()].tolist())
+        for rti in real_target_ids:
+            logger.info("Target tokens = %s" % " ".join(tokenizer.convert_ids_to_tokens(rti)))
 
     logger.info("Mode = %s" % str(model))
     return train_dataset

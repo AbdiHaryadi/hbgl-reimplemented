@@ -68,7 +68,6 @@ def test(
             tokenizer_name=args.model_name_or_path,
             input_file=args.test_file,
             split="test",
-            do_lower_case=True,
             model_path=save_path,
             max_seq_length=(
                 args.max_source_seq_length + args.max_target_seq_length
@@ -77,15 +76,8 @@ def test(
             ),
             max_tgt_length=args.max_target_seq_length,
             batch_size=128,
-            beam_size=1,
-            length_penalty=0,
-            forbid_duplicate_ngrams=True,
-            mode="s2s",
-            forbid_ignore_word='"."',
             cached_features_file=os.path.join(args.output_dir, "cached_features_for_test.pt"),
             add_vocab_file=args.add_vocab_file,
-            softmax_label_only=args.softmax_label_only,
-            soft_label=args.soft_label,
             soft_label_hier_real_with_train_file=(
                 args.train_file if args.soft_label_hier_real else None
             )
@@ -130,19 +122,18 @@ def prepare_training_features(
         tokenizer: BertTokenizer,
         old_vocab_size: int
 ):
+    # args.lmdb_cache <- TODO: Remove this
+    # args.lmdb_dtype <- TODO: Remove this
     training_features = load_and_cache_examples(
         example_file=args.train_file, tokenizer=tokenizer, local_rank=args.local_rank,
         cached_features_file=args.cached_train_features_file, shuffle=True,
-        lmdb_cache=args.lmdb_cache, lmdb_dtype=args.lmdb_dtype,
-        soft_label=args.soft_label,
     )
 
     if args.add_vocab_file:
         for example in training_features:
             for target_id_list in example.target_ids:
-                if args.soft_label:
-                    for target_id in target_id_list:
-                        assert target_id >= old_vocab_size
+                for target_id in target_id_list:
+                    assert target_id >= old_vocab_size
     return training_features
 
 def prepare_model_and_tokenizer(args: HBGLTrainingArguments):
@@ -165,8 +156,7 @@ def set_args_cached_train_features_file(args: HBGLTrainingArguments):
         else:
             args.cached_train_features_file = os.path.join(args.output_dir, "cached_features_for_training_lmdb")
 
-    if args.soft_label:
-        args.cached_train_features_file += 'soft_label'
+    args.cached_train_features_file += 'soft_label'
 
 def init_wandb_if_active(args: HBGLTrainingArguments):
     if args.wandb:

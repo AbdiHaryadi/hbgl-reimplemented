@@ -223,7 +223,7 @@ def report_length(length_counter, total_count):
 
 def load_and_cache_examples(
         example_file, tokenizer, local_rank, cached_features_file, shuffle=True, 
-        lmdb_cache=None, lmdb_dtype='h', eval_mode=False, soft_label=False):
+):
     # Make sure only the first process in distributed training process the dataset, and the others will use the cache
     if local_rank not in [-1, 0]:
         torch.distributed.barrier()
@@ -244,14 +244,11 @@ def load_and_cache_examples(
         tlc = defaultdict(int)
 
         for example in tqdm(examples):
-            if soft_label:
-                source_tokens = tokenizer.tokenize(example["src"])
-                source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
-                target_ids = [tokenizer.convert_tokens_to_ids([
-                    id_to_label_token(label).lower() for label in label_list_per_level
-                ]) for label_list_per_level in example['tgt']]
-            else:
-                raise ValueError("For soft_label = False, I didn't support it for now.")
+            source_tokens = tokenizer.tokenize(example["src"])
+            source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
+            target_ids = [tokenizer.convert_tokens_to_ids([
+                id_to_label_token(label).lower() for label in label_list_per_level
+            ]) for label_list_per_level in example['tgt']]
 
             slc[len(source_ids)] += 1
             tlc[len(target_ids)] += 1

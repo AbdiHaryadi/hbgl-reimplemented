@@ -46,7 +46,7 @@ def main(args: HBGLTestingArguments):
         "cuda" if torch.cuda.is_available() else "cpu")
     
     tokenizer: BertTokenizer = BertTokenizer.from_pretrained(
-        args.tokenizer_name, do_lower_case=args.do_lower_case,
+        args.tokenizer_name, do_lower_case=True,
         cache_dir=args.cache_dir if args.cache_dir else None)
     assert isinstance(tokenizer.mask_token_id, int)
     assert isinstance(tokenizer.sep_token_id, int)
@@ -63,8 +63,6 @@ def main(args: HBGLTestingArguments):
     tokenizer.model_max_length = args.max_seq_length
     mask_word_id = tokenizer.mask_token_id
     eos_word_id = tokenizer.sep_token_id
-    sos_word_id = tokenizer.sep_token_id
-    forbid_ignore_set = None  # Dibuat kosong saja karena ... entah gunanya apa.
     print(args.model_path)
     found_checkpoint_flag = False
     for model_recover_path in glob.glob(args.model_path):
@@ -93,22 +91,17 @@ def main(args: HBGLTestingArguments):
 
         found_checkpoint_flag = True
         model = BertForSeq2SeqDecoder.from_pretrained(
-            model_recover_path, config=config, mask_word_id=mask_word_id, search_beam_size=args.beam_size,
-            length_penalty=args.length_penalty, eos_id=eos_word_id, sos_id=sos_word_id,
-            forbid_duplicate_ngrams=args.forbid_duplicate_ngrams, forbid_ignore_set=forbid_ignore_set,
-            ngram_size=args.ngram_size, min_len=args.min_len, mode=args.mode,
+            model_recover_path, config=config,
+            mask_word_id=mask_word_id,
+            eos_id=eos_word_id,
             pos_shift=args.pos_shift,
         )
 
-        if args.softmax_label_only and args.add_vocab_file:
-            model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
+        model.soft_label = True
+        model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
 
-        if args.soft_label:
-            model.soft_label = args.soft_label
-            model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
-
-            if args.soft_label_hier_real_with_train_file:
-                prepare_hier_labels(args, tokenizer, model)  # Is this even used?
+        if args.soft_label_hier_real_with_train_file:
+            prepare_hier_labels(args, tokenizer, model)  # Is this even used?
 
         model.to(device)  # type: ignore
         if torch.cuda.device_count() > 1:
@@ -174,7 +167,8 @@ def get_outputs(
     if num_lines < 10000:
         to_pred = load_and_cache_examples(
                 args.input_file, tokenizer, local_rank=-1,
-                cached_features_file=args.cached_features_file, shuffle=False, eval_mode=True)
+                cached_features_file=args.cached_features_file, shuffle=False)
+        # Kinda inconsistent because eval_mode is utilized in fast mode.
     else:
         to_pred = load_and_cache_examples_fast(
                 args.input_file, tokenizer, local_rank=-1,
@@ -220,11 +214,7 @@ def get_outputs(
                     task_idx=task_idx.to(device)
                 )
 
-                if args.beam_size > 1:
-                    traces = {k: v.tolist() for k, v in traces.items()}
-                    output_ids = traces['pred_seq']
-                else:
-                    output_ids = traces.tolist()
+                output_ids = traces.tolist()
                 for i in range(len(buf)):
                     w_ids = output_ids[i]
                     output_buf = tokenizer.convert_ids_to_tokens(w_ids)
