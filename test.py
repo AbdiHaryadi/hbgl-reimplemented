@@ -18,7 +18,7 @@ from transformers import BertConfig, BertTokenizer
 
 from args import HBGLTestingArguments, parse_to_testing_arguments
 from eval import evaluate
-from modeling_decoding_v2 import BertForSeq2SeqDecoder
+from modeling_decoding import BertForSeq2SeqDecoder
 import seq2seq_loader
 from utils import id_to_label_token, load_and_cache_examples, load_and_cache_examples_fast
 

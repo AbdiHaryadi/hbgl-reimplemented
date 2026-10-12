@@ -7,7 +7,7 @@ from transformers import BertConfig, BertTokenizer, RobertaConfig
 from args import HBGLTrainingArguments
 from hierarchy import LabelHierarchy
 import ghle
-from modeling_v2 import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
+from modeling import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
 from utils import id_to_label_token
 
 logger = logging.getLogger(__name__)

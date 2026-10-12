@@ -12,7 +12,7 @@ from transformers import BertTokenizer, get_linear_schedule_with_warmup
 import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments
-from modeling_v2 import BertForSequenceToSequence
+from modeling import BertForSequenceToSequence
 import test
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
 
