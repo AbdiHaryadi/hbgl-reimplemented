@@ -1,4 +1,3 @@
-import array
 from collections import defaultdict
 import json
 import logging
@@ -7,7 +6,6 @@ import os
 import random
 import time
 
-import lmdb
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -209,35 +207,6 @@ def _fast_process_one(example, tokenizer):
         out_dict["target_kd_ids"] = tokenizer.convert_tokens_to_ids(target_kd_tokens)
     return out_dict
 
-def deserialize_str(x):
-    return x.decode('ascii')
-
-class DocDB(object):
-    def __init__(self, db_path):
-        self.db_path = db_path
-        self.env = lmdb.open(db_path, readonly=True, lock=False, readahead=False, meminit=False)
-        with self.env.begin(write=False) as txn:
-            self.start_key_index = int(deserialize_str(txn.get(b'__start__')))
-            self.size = int(deserialize_str(txn.get(b'__size__')))
-            self.dtype = deserialize_str(txn.get(b'__dtype__'))
-
-    def _deserialize_array(self, x):
-        data = array.array(self.dtype)
-        data.frombytes(x)
-        return data.tolist()
-
-    def __getitem__(self, doc_id):
-        with self.env.begin(write=False) as txn:
-            example = TrainingExample(
-                source_ids=self._deserialize_array(txn.get(b"src_ids_%d" % doc_id)), 
-                target_ids=self._deserialize_array(txn.get(b"tgt_ids_%d" % doc_id)),
-                example_id=None, 
-            )
-        return example
-
-    def __len__(self):
-        return self.size
-
 def report_length(length_counter, total_count):
     max_len = max(length_counter.keys())
     a = 0
@@ -251,31 +220,6 @@ def report_length(length_counter, total_count):
         if cc > 0:
             logger.info("%d ~ %d = %d, %.2f%%" % (a, a + 16, cc, (tc * 100.0) / total_count))
         a += 16
-
-def write_to_lmdb(db, key, value):
-    success = False
-    while not success:
-        txn = db.begin(write=True)
-        try:
-            txn.put(key, value)
-            txn.commit()
-            success = True
-        except lmdb.MapFullError:
-            txn.abort()
-            # double the map_size
-            curr_limit = db.info()['map_size']
-            new_limit = curr_limit*2
-            print('>>> Doubling LMDB map size to %sMB ...' %
-                  (new_limit >> 20,))
-            db.set_mapsize(new_limit)  # double it
-
-def serialize_array(x, dtype):
-    data = array.array(dtype)  # <- Deprecated, but I don't know how to fix this.
-    data.fromlist(x)
-    return data.tobytes()
-
-def serialize_str(x):
-    return u"{}".format(x).encode('ascii')
 
 def load_and_cache_examples(
         example_file, tokenizer, local_rank, cached_features_file, shuffle=True, 
