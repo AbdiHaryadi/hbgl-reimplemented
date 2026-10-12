@@ -56,6 +56,19 @@ class BertForSeq2SeqConfig(BertConfig):
         return cls(label_smoothing=label_smoothing, fix_word_embedding=fix_word_embedding, **kwargs)
 
 def get_model_and_tokenizer(args: HBGLTrainingArguments):
+    if args.local_rank not in [-1, 0]:
+        torch.distributed.barrier()
+        # Make sure only the first process in distributed training will download model & vocab
+    # Load pretrained model and tokenizer
+    model, tokenizer, old_vocab_size = _get_model_and_tokenizer(args)
+
+    if args.local_rank == 0:
+        torch.distributed.barrier()
+        # Make sure only the first process in distributed training will download model & vocab
+
+    return model,tokenizer,old_vocab_size
+
+def _get_model_and_tokenizer(args: HBGLTrainingArguments):
     model_config = BertConfig.from_pretrained(
         args.config_name if args.config_name else args.model_name_or_path,
         cache_dir=args.cache_dir if args.cache_dir else None)

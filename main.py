@@ -12,7 +12,7 @@ from args import HBGLTestingArguments, HBGLTrainingArguments, parse_to_training_
 from prepare import get_model_and_tokenizer
 from train import train
 from test import main as test_main
-from utils import load_and_cache_examples
+from utils import TrainingExample, load_and_cache_examples
 
 LOGLEVEL = os.environ.get('LOGLEVEL', 'INFO').upper()
 logger = logging.getLogger(__name__)
@@ -26,31 +26,46 @@ def prepare(args: HBGLTrainingArguments):
     - Distant debugging
     - args.fp16 (including apex)
     """
-    os.makedirs(args.output_dir, exist_ok=True)
-    json.dump(args.__dict__, open(os.path.join(
-        args.output_dir, 'train_opt.json'), 'w'), sort_keys=True, indent=2)
+    prepare_output_dir(args)
+    setup_cuda_gpu_and_distributed_training(args)
+    setup_logging(args)
+    set_seed(args)
+    logger.info("Training/evaluation parameters %s", args)
+    init_wandb_if_needed(args)
 
-    # Setup CUDA, GPU & distributed training
-    if (args.local_rank != -1) and (not args.no_cuda):
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(backend='nccl')
+def init_wandb_if_needed(args: HBGLTrainingArguments):
+    if (not args.only_test) and args.wandb:
+        wandb.init(
+                project="HBGL",
+                name=args.output_dir.split('/')[-1],
+            )
+        wandb.define_metric("train/global_step")
+        wandb.define_metric("*", step_metric="train/global_step", step_sync=True)
 
-    # Setup logging
-    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-                        datefmt='%m/%d/%Y %H:%M:%S',
-                        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
-    logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
-                   args.local_rank, args.device, args.n_gpu, bool(args.local_rank != -1))
-
-    # Set seed
+def set_seed(args: HBGLTrainingArguments):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
-    logger.info("Training/evaluation parameters %s", args)
+def setup_logging(args: HBGLTrainingArguments):
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+                        datefmt='%m/%d/%Y %H:%M:%S',
+                        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
+    logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
+                   args.local_rank, args.device, args.n_gpu, bool(args.local_rank != -1))
+
+def setup_cuda_gpu_and_distributed_training(args: HBGLTrainingArguments):
+    if (args.local_rank != -1) and (not args.no_cuda):
+        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        torch.cuda.set_device(args.local_rank)
+        torch.distributed.init_process_group(backend='nccl')
+
+def prepare_output_dir(args: HBGLTrainingArguments):
+    os.makedirs(args.output_dir, exist_ok=True)
+    json.dump(args.__dict__, open(os.path.join(
+        args.output_dir, 'train_opt.json'), 'w'), sort_keys=True, indent=2)
 
 def test(
         args: HBGLTrainingArguments,
@@ -109,64 +124,32 @@ def main():
         test(args, args.only_test_path, None)
         return
 
-    init_wandb_if_active(args)
-    model, tokenizer, old_vocab_size = prepare_model_and_tokenizer(args)
-    set_args_cached_train_features_file(args)
-    training_features = prepare_training_features(args, tokenizer, old_vocab_size)
+    model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
+    training_features = load_and_cache_examples(
+        example_file=args.train_file,
+        tokenizer=tokenizer,
+        local_rank=args.local_rank,
+        cached_features_file=(
+            os.path.join(args.output_dir, "cached_features_for_training.pt")
+            if args.cached_train_features_file is None
+            else args.cached_train_features_file
+        ) + "soft_label",
+        shuffle=True,
+    )
+    if args.add_vocab_file:
+        assert_correct_target_id(old_vocab_size, training_features)
     best_macro_f1_path, best_micro_f1_path = train(args, training_features, model, tokenizer)
     if args.test_file:
         test(args, best_macro_f1_path, best_micro_f1_path)
 
-def prepare_training_features(
-        args: HBGLTrainingArguments,
-        tokenizer: BertTokenizer,
-        old_vocab_size: int
+def assert_correct_target_id(
+        old_vocab_size: int,
+        training_features: list[TrainingExample]
 ):
-    # args.lmdb_cache <- TODO: Remove this
-    # args.lmdb_dtype <- TODO: Remove this
-    training_features = load_and_cache_examples(
-        example_file=args.train_file, tokenizer=tokenizer, local_rank=args.local_rank,
-        cached_features_file=args.cached_train_features_file, shuffle=True,
-    )
-
-    if args.add_vocab_file:
-        for example in training_features:
-            for target_id_list in example.target_ids:
-                for target_id in target_id_list:
-                    assert target_id >= old_vocab_size
-    return training_features
-
-def prepare_model_and_tokenizer(args: HBGLTrainingArguments):
-    if args.local_rank not in [-1, 0]:
-        torch.distributed.barrier()
-        # Make sure only the first process in distributed training will download model & vocab
-    # Load pretrained model and tokenizer
-    model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
-
-    if args.local_rank == 0:
-        torch.distributed.barrier()
-        # Make sure only the first process in distributed training will download model & vocab
-
-    return model,tokenizer,old_vocab_size
-
-def set_args_cached_train_features_file(args: HBGLTrainingArguments):
-    if args.cached_train_features_file is None:
-        if not args.lmdb_cache:
-            args.cached_train_features_file = os.path.join(args.output_dir, "cached_features_for_training.pt")
-        else:
-            args.cached_train_features_file = os.path.join(args.output_dir, "cached_features_for_training_lmdb")
-
-    args.cached_train_features_file += 'soft_label'
-
-def init_wandb_if_active(args: HBGLTrainingArguments):
-    if args.wandb:
-        wandb.init(
-            project="HBGL",
-            name=args.output_dir.split('/')[-1],
-        )
-        wandb.define_metric("train/global_step")
-        wandb.define_metric("*", step_metric="train/global_step", step_sync=True)
-
+    for example in training_features:
+        for target_id_list in example.target_ids:
+            for target_id in target_id_list:
+                assert target_id >= old_vocab_size
 
 if __name__ == "__main__":
     main()

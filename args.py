@@ -44,8 +44,6 @@ class HBGLTrainingArguments:
     target_mask_prob: float = 0.5
     num_max_mask_token: int = 0
     mask_way: str = 'v2'
-    lmdb_cache: bool = False
-    lmdb_dtype: str = 'h'
     add_vocab_file: str | None = None
     wandb: bool = False
     soft_label_hier_real: bool = False
@@ -87,6 +85,8 @@ def parse_to_training_arguments(args=None):
     - --model_type
     - --softmax_label_only
     - --soft_label (always true)
+    - --lmdb_cache
+    - --lmdb_dtype
     """
 
     parser = argparse.ArgumentParser()
@@ -172,10 +172,6 @@ def parse_to_training_arguments(args=None):
                         help="The number of the max masked tokens in target sequence")
     parser.add_argument('--mask_way', type=str, default='v2',
                         help="Fine-tuning method (v0: position shift, v1: masked LM, v2: pseudo-masking)")
-    parser.add_argument("--lmdb_cache", action='store_true',
-                        help="Use LMDB to cache training features")
-    parser.add_argument("--lmdb_dtype", type=str, default='h',
-                        help="Data type for cached data type for LMDB")
 
     parser.add_argument("--add_vocab_file", type=str, default=None)
     parser.add_argument('--wandb', action='store_true')
