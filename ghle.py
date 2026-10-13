@@ -53,7 +53,6 @@ class GHLETrainingArguments:
     batch_size: int = 32
     increased_mask_ratio: bool = True
     use_bce: bool = False
-    decode_with_pos: bool = False
 
     @classmethod
     def from_args(cls, args: HBGLTrainingArguments):
@@ -71,7 +70,6 @@ class GHLETrainingArguments:
             batch_size=args.label_cpt_bsz,
             increased_mask_ratio=not args.label_cpt_not_incr_mask_ratio,
             use_bce=args.label_cpt_use_bce,
-            decode_with_pos=args.label_cpt_decodewithpos,
         )
 
 class GHLETrainer:
@@ -161,12 +159,7 @@ class GHLETrainer:
         return batched_attention_mask
 
     def get_batched_position_ids(self):
-        batched_position_ids = self.position_ids.unsqueeze(0).repeat(self.args.batch_size, 1).to(self.device).long()
-
-        if self.args.decode_with_pos:
-            batched_position_ids[:, 1:-1] += self.args.max_source_seq_length - 1
-            batched_position_ids[:, -1] = self.args.max_source_seq_length + self.args.max_target_seq_length - 1
-        return batched_position_ids
+        return self.position_ids.unsqueeze(0).repeat(self.args.batch_size, 1).to(self.device).long()
 
     def generate_masked_input_embeds(self, model, label_embeddings, current_mask_ratio):
         mask_tokens = self.generate_mask_tokens(current_mask_ratio)

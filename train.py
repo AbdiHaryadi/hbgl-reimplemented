@@ -161,31 +161,24 @@ def train(
             if global_step > args.num_training_steps:
                 break
             batch = tuple(t.to(args.device) for t in batch)
-            if args.mask_way == 'v2':
-                inputs = {'source_ids': batch[0],
-                        'target_ids': batch[1],
-                        'label_ids': batch[2],
-                        'pseudo_ids': batch[3],
-                        'num_source_tokens': batch[4],
-                        'num_target_tokens': batch[5]}
-            elif args.mask_way == 'v1' or args.mask_way == 'v0':
-                inputs = {'source_ids': batch[0],
-                        'target_ids': batch[1],
-                        'masked_ids': batch[2],
-                        'masked_pos': batch[3],
-                        'masked_weight': batch[4],
-                        'num_source_tokens': batch[5],
-                        'num_target_tokens': batch[6]}
+            (
+                source_ids,
+                target_ids,
+                label_ids,
+                pseudo_ids,
+                num_source_tokens,
+                num_target_tokens
+            ) = tuple(t.to(args.device) for t in batch)
 
-            inputs['label_ids'] = inputs['label_ids'].float()
-            inputs['target_ids'] = inputs['target_ids'].float()
-
-            if args.label_cpt_decodewithpos:
-                logger.info(f"I have no idea why there's a model.target_offset here. ({args.max_source_seq_length})")
-                model.target_offset = args.max_source_seq_length  # type: ignore
-                inputs['target_no_offset'] = True
-
-            loss = model(**inputs)
+            # mask_way == 'v2'
+            loss = model(
+                source_ids=source_ids,
+                target_ids=target_ids.float(),
+                label_ids=label_ids.float(),
+                pseudo_ids=pseudo_ids,
+                num_source_tokens=num_source_tokens,
+                num_target_tokens=num_target_tokens,
+            )
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel (not distributed) training
 
@@ -229,11 +222,7 @@ def train(
                         input_file=args.valid_file,
                         split="valid",
                         model_path=save_path,
-                        max_seq_length=(
-                            args.max_source_seq_length + args.max_target_seq_length
-                            if args.label_cpt_decodewithpos
-                            else args.max_source_seq_length
-                        ),
+                        max_seq_length=args.max_source_seq_length,
                         max_tgt_length=args.max_target_seq_length,
                         # Original: 32
                         # Changing it to per_gpu_train_batch_size still CUDAOutOfMemoryError
@@ -330,9 +319,6 @@ def create_train_dataset(
         num_training_instances=train_batch_size * args.num_training_steps,
         source_mask_prob=args.source_mask_prob,
         target_mask_prob=args.target_mask_prob,
-        mask_way=args.mask_way,
-        num_max_mask_token=args.num_max_mask_token,
-        soft_label=True,
     )
 
     logger.info("Check dataset:")

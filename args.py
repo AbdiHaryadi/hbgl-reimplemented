@@ -42,24 +42,18 @@ class HBGLTrainingArguments:
     local_rank: int = -1
     source_mask_prob: float = -1.0
     target_mask_prob: float = 0.5
-    num_max_mask_token: int = 0
-    mask_way: str = 'v2'
     add_vocab_file: str | None = None
     wandb: bool = False
     soft_label_hier_real: bool = False
-    one_by_one_label_init_map: str | None = None
     label_cpt: str | None = None
     label_cpt_lr: float = 0.001
     label_cpt_steps: int = 500
     label_cpt_bsz: int = 32
     label_cpt_not_incr_mask_ratio: bool = False
     label_cpt_use_bce: bool = False
-    label_cpt_decodewithpos: bool = False
     random_label_init: bool = False
-    nyt_only_last_label_init: bool = False
     only_test: bool = False
     only_test_path: str | None = None
-    rcv1_expand: str | None = None
 
     @property
     def n_gpu(self):
@@ -83,10 +77,18 @@ def parse_to_training_arguments(args=None):
     - --server_ip
     - --server_port
     - --model_type
+
+    Removed this because I don't need it:
     - --softmax_label_only
     - --soft_label (always true)
     - --lmdb_cache
     - --lmdb_dtype
+    - --rcv1_expand (I don't use this dataset)
+    - --nyt_only_last_label_init
+    - --one_by_one_label_init_map
+    - --label_cpt_decodewithpos (always false)
+    - --mask_way (always v2 [pseudo-masking])
+    - --num_max_mask_token (not used)
     """
 
     parser = argparse.ArgumentParser()
@@ -168,17 +170,12 @@ def parse_to_training_arguments(args=None):
                         help="Probability to mask source sequence in fine-tuning")
     parser.add_argument('--target_mask_prob', type=float, default=0.5,
                         help="Probability to mask target sequence in fine-tuning")
-    parser.add_argument('--num_max_mask_token', type=int, default=0,
-                        help="The number of the max masked tokens in target sequence")
-    parser.add_argument('--mask_way', type=str, default='v2',
-                        help="Fine-tuning method (v0: position shift, v1: masked LM, v2: pseudo-masking)")
 
     parser.add_argument("--add_vocab_file", type=str, default=None)
     parser.add_argument('--wandb', action='store_true')
 
     parser.add_argument('--soft_label_hier_real', action='store_true')
 
-    parser.add_argument('--one_by_one_label_init_map', type=str, default=None)
     parser.add_argument('--label_cpt', type=str, default=None)
     parser.add_argument('--label_cpt_lr', type=float, default=1e-3)
     parser.add_argument('--label_cpt_steps', type=int, default=500)
@@ -186,16 +183,10 @@ def parse_to_training_arguments(args=None):
     parser.add_argument('--label_cpt_not_incr_mask_ratio', action='store_true')
     parser.add_argument('--label_cpt_use_bce', action='store_true')
 
-    parser.add_argument('--label_cpt_decodewithpos', action='store_true')
-
     parser.add_argument('--random_label_init', action='store_true')
-
-    parser.add_argument('--nyt_only_last_label_init', action='store_true')
 
     parser.add_argument('--only_test', action='store_true')
     parser.add_argument('--only_test_path', type=str, default=None)
-
-    parser.add_argument('--rcv1_expand', type=str, default=None)
 
     return HBGLTrainingArguments(**{
         k: v for k, v in vars(parser.parse_args(args=args)).items()

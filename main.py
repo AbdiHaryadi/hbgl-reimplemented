@@ -84,11 +84,7 @@ def test(
             input_file=args.test_file,
             split="test",
             model_path=save_path,
-            max_seq_length=(
-                args.max_source_seq_length + args.max_target_seq_length
-                if args.label_cpt_decodewithpos
-                else args.max_source_seq_length
-            ),
+            max_seq_length=args.max_source_seq_length,
             max_tgt_length=args.max_target_seq_length,
             batch_size=128,
             cached_features_file=os.path.join(args.output_dir, "cached_features_for_test.pt"),

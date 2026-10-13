@@ -400,7 +400,6 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         self.label_start_index = -1
         self.ab_bound_token_id = -1
-        self.soft_label = False
         self.hier_labels = None
         self.soft_label_hier_real = False
 
@@ -436,7 +435,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         pred_embeds = None
         while next_pos < output_length:
-            if self.soft_label and curr_ids is None and pred_embeds is not None:
+            if curr_ids is None and pred_embeds is not None:
                 # set curr_ids to None in two more loops
                 curr_length = pred_embeds.size(dim=1)
                 if self.pos_shift:
@@ -466,7 +465,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                     x_input_ids = torch.cat((curr_ids, mask_ids), dim=1)
                 x_input_embeds = None
             else:
-                raise ValueError("curr_ids should not None or soft_label is active")
+                raise ValueError("Cannot handle when curr_ids and pred_embeds are None")
 
 
             curr_token_type_ids = token_type_ids[:, start_pos:next_pos + 1]
@@ -479,7 +478,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             else:
                 cur_rel_pos = None
 
-            if self.soft_label and x_input_embeds is not None:
+            if x_input_embeds is not None:
                 new_embedding, new_encoded_layers = \
                     self.bert(None, curr_token_type_ids, curr_position_ids, curr_attention_mask,
                             output_all_encoded_layers=True, prev_embedding=prev_embedding,
@@ -493,92 +492,55 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             assert isinstance(new_embedding, torch.Tensor)
 
             last_hidden = new_encoded_layers[-1][:, -1:, :]
-            if self.soft_label:
-                if self.soft_label_hier_real and self.hier_labels is not None:
-                    curr_hier = len(output_ids)
-                    hl = self.hier_labels[curr_hier]
-                    prediction_scores = self.cls(last_hidden)
+            if self.soft_label_hier_real and self.hier_labels is not None:
+                curr_hier = len(output_ids)
+                hl = self.hier_labels[curr_hier]
+                prediction_scores = self.cls(last_hidden)
 
-                    prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                                prediction_scores[:, :, hl]], dim=-1)
+                prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
+                                            prediction_scores[:, :, hl]], dim=-1)
 
-                    prediction_scores = torch.sigmoid(prediction_scores) > 0.5
+                prediction_scores = torch.sigmoid(prediction_scores) > 0.5
 
-                    _pred_ids: list[torch.Tensor] = []
-                    for i in range(prediction_scores.shape[0]):
-                        device = prediction_scores.device
-                        pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
-                        sep_mask = pred_ids == 0
-                        pred_ids[sep_mask] = self.eos_id
-                        pred_ids[~sep_mask] = torch.arange(hl.shape[-1], device=device)[hl][pred_ids[~sep_mask] - 1]
-                        _pred_ids.append(pred_ids)
-                    pred_ids = _pred_ids
-                    output_ids.append(pred_ids)
+                _pred_ids: list[torch.Tensor] = []
+                for i in range(prediction_scores.shape[0]):
+                    device = prediction_scores.device
+                    pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
+                    sep_mask = pred_ids == 0
+                    pred_ids[sep_mask] = self.eos_id
+                    pred_ids[~sep_mask] = torch.arange(hl.shape[-1], device=device)[hl][pred_ids[~sep_mask] - 1]
+                    _pred_ids.append(pred_ids)
+                pred_ids = _pred_ids
+                output_ids.append(pred_ids)
 
-                    pred_embeds =  prediction_scores.float() @ torch.cat(
-                        [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
-                        self.bert.embeddings.word_embeddings.weight.data[hl]], dim=0)
-                    max_ids = None
-                else:
-                    lsi = self.label_start_index
-                    prediction_scores = self.cls(last_hidden)
-
-                    prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                                prediction_scores[:, :, lsi:]], dim=-1)
-
-                    prediction_scores = torch.sigmoid(prediction_scores) > 0.5
-
-                    _pred_ids: list[torch.Tensor] = []
-                    for i in range(prediction_scores.shape[0]):
-                        device = prediction_scores.device
-                        pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
-                        sep_mask = pred_ids == 0
-                        pred_ids[sep_mask] = self.eos_id
-                        pred_ids[~sep_mask] += lsi - 1
-                        _pred_ids.append(pred_ids)
-                    pred_ids = _pred_ids
-                    output_ids.append(pred_ids)
-
-                    pred_embeds =  prediction_scores.float() @ torch.cat(
-                        [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
-                        self.bert.embeddings.word_embeddings.weight.data[lsi:]], dim=0)
-                    max_ids = None
-            elif self.label_start_index > 0:
+                pred_embeds =  prediction_scores.float() @ torch.cat(
+                    [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
+                    self.bert.embeddings.word_embeddings.weight.data[hl]], dim=0)
+                max_ids = None
+            else:
                 lsi = self.label_start_index
                 prediction_scores = self.cls(last_hidden)
 
                 prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                               prediction_scores[:, :, lsi:]], dim=-1)
+                                            prediction_scores[:, :, lsi:]], dim=-1)
 
-                _, max_ids = torch.max(prediction_scores, dim=-1)
-                sep_mask = max_ids == 0
-                max_ids[sep_mask] = self.eos_id
-                max_ids[~sep_mask] += lsi - 1
-                output_ids.append(max_ids)
-            elif self.ab_bound_token_id > 0:
-                if len(output_ids) > 0:
-                    last_output_ids = output_ids[-1]
-                    hidden_states = self.cls.predictions.transform(last_hidden)
-                    prediction_scores = F.linear(hidden_states, weight=self.cls.predictions.decoder.weight, bias=self.cls.predictions.bias)
-                    b_token_embs = self.cls.predictions.decoder.weight[self.ab_bound_token_id:, ]
+                prediction_scores = torch.sigmoid(prediction_scores) > 0.5
 
-                    for i, label_id in enumerate(last_output_ids.view(-1).tolist()):
-                        if label_id < self.ab_bound_token_id:
-                            new_b_token_embs = b_token_embs + self.cls.predictions.decoder.weight[label_id]
-                            new_b_scores = F.linear(hidden_states[i], weight=new_b_token_embs,
-                                                    bias=self.cls.predictions.bias[self.ab_bound_token_id:])
-                            prediction_scores[i, :,   self.ab_bound_token_id:] = new_b_scores
+                _pred_ids: list[torch.Tensor] = []
+                for i in range(prediction_scores.shape[0]):
+                    device = prediction_scores.device
+                    pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
+                    sep_mask = pred_ids == 0
+                    pred_ids[sep_mask] = self.eos_id
+                    pred_ids[~sep_mask] += lsi - 1
+                    _pred_ids.append(pred_ids)
+                pred_ids = _pred_ids
+                output_ids.append(pred_ids)
 
-                    _, max_ids = torch.max(prediction_scores, dim=-1)
-                    output_ids.append(max_ids)
-                else:
-                    prediction_scores = self.cls(last_hidden)
-                    _, max_ids = torch.max(prediction_scores, dim=-1)
-                    output_ids.append(max_ids)
-            else:
-                prediction_scores = self.cls(last_hidden)
-                _, max_ids = torch.max(prediction_scores, dim=-1)
-                output_ids.append(max_ids)
+                pred_embeds =  prediction_scores.float() @ torch.cat(
+                    [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
+                    self.bert.embeddings.word_embeddings.weight.data[lsi:]], dim=0)
+                max_ids = None
 
             if self.pos_shift:
                 if prev_embedding is None:
@@ -606,22 +568,19 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             curr_ids = max_ids
             next_pos += 1
 
-        if self.soft_label:
-            device = output_ids[0][0].device
-            _output_ids: list = [[] for _ in output_ids[0]]
-            max_l = 0
-            for i, oi in enumerate(_output_ids):
-                
-                _output_ids[i] = torch.cat([j[i] for j in output_ids], dim=0)
-                index = 10000
-                for index, d in enumerate(_output_ids[i].tolist()):
-                    if d == 102: break
-                _output_ids[i] = sorted(list(set(_output_ids[i].tolist()[:index])), reverse=True)
-                max_l = max(len(_output_ids[i]), max_l)
+        device = output_ids[0][0].device
+        _output_ids: list = [[] for _ in output_ids[0]]
+        max_l = 0
+        for i, oi in enumerate(_output_ids):
+            
+            _output_ids[i] = torch.cat([j[i] for j in output_ids], dim=0)
+            index = 10000
+            for index, d in enumerate(_output_ids[i].tolist()):
+                if d == 102: break
+            _output_ids[i] = sorted(list(set(_output_ids[i].tolist()[:index])), reverse=True)
+            max_l = max(len(_output_ids[i]), max_l)
 
-            for i, oi in enumerate(_output_ids):
-                _output_ids[i] = torch.tensor(oi + [0] * (max_l - len(oi)), dtype=torch.long, device=device).unsqueeze(0)
-            output_ids = _output_ids
-            return torch.cat(output_ids, dim=0)
-        else:
-            return torch.cat(output_ids, dim=1)
+        for i, oi in enumerate(_output_ids):
+            _output_ids[i] = torch.tensor(oi + [0] * (max_l - len(oi)), dtype=torch.long, device=device).unsqueeze(0)
+        output_ids = _output_ids
+        return torch.cat(output_ids, dim=0)

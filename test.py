@@ -97,7 +97,6 @@ def main(args: HBGLTestingArguments):
             pos_shift=args.pos_shift,
         )
 
-        model.soft_label = True
         model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
 
         if args.soft_label_hier_real_with_train_file:

@@ -30,11 +30,8 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
             tokenizer: BertTokenizer,
             offset: int,
             num_training_instances: int, 
-            mask_way: str = 'v1',
             target_mask_prob: float = -1.0,
-            num_max_mask_token: int = 0 , 
             source_mask_prob: float = -1.0,
-            soft_label: bool = False,
     ):
         assert isinstance(tokenizer.cls_token_id, int)
         assert isinstance(tokenizer.sep_token_id, int)
@@ -50,32 +47,20 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         self.cls_id = tokenizer.cls_token_id
         self.sep_id = tokenizer.sep_token_id
         self.pad_id = tokenizer.pad_token_id
-        self.random_prob = 0.0
-        self.keep_prob = 0.0
         self.mask_id = tokenizer.mask_token_id
         self.vocab_size = vocab_size
         self.num_training_instances = num_training_instances
         self.target_mask_prob = target_mask_prob
-        if mask_way == 'v0':
-            num_max_mask_token = self.max_target_len
-            logger.info("Mask way v0: set num_max_mask_token = %d" % num_max_mask_token)
-        self.num_max_mask_token = num_max_mask_token
-        self.mask_way = mask_way
-        assert mask_way in ('v0', 'v1', 'v2')
         self.source_mask_prob = source_mask_prob
-
-        self.soft_label = soft_label
 
     def __len__(self):
         return self.num_training_instances
 
-    def __trunk(self, ids: list[int], max_len: int, append_sep=True):
-        if append_sep:
-            max_len -= 1
+    def __trunk(self, ids: list[int], max_len: int):
+        max_len -= 1
         if len(ids) > max_len:
             ids = ids[:max_len]
-        if append_sep:
-            ids = ids + [self.sep_id]
+        ids = ids + [self.sep_id]
         return ids
 
     def __pad(self, ids, max_len):
@@ -90,12 +75,42 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         # since it's not supported in HBGL.
         return self.mask_id
 
-    def soft_label_getitem(self, _idx: int):
-        assert self.mask_way == 'v2'
+    def get_num_target_tokens_by_target_ids(self, target_ids: torch.Tensor):
+        return target_ids.shape[0]
+
+    def unnamed_method(self, target_ids: torch.Tensor):
+        # target_ids is two dimensional
+        num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
+
+        pseudo_ids = []
+        label_ids = []
+        for pos in range(num_target_tokens):
+            tk_id = target_ids[pos]
+            masked_tk_id = self.get_masked_token()
+            pseudo_ids.append(masked_tk_id)
+            label_ids.append(tk_id.clone())
+            r = random.random()
+            if r < self.target_mask_prob:
+                target_ids[pos] = 0
+                target_ids[pos][masked_tk_id] = 1
+        pseudo_ids = self.__pad(pseudo_ids, self.max_target_len)
+        label_ids = torch.stack(label_ids, dim=0)
+
+
+        p1d = (0, 0, 0, self.max_target_len - label_ids.shape[0])
+        label_ids = F.pad(label_ids, p1d, "constant", 0)  # effectively zero padding
+
+        p1d = (0, 0, 0, self.max_target_len - target_ids.shape[0])
+        target_ids = F.pad(target_ids, p1d, "constant", 0)  # effectively zero padding
+
+        return target_ids, label_ids, pseudo_ids
+
+    def __getitem__(self, _idx) -> Seq2seqDatasetForBertElementType:
+        # mask_way = v2 and soft_label
         idx = (self.offset + _idx) % len(self.features)
         # print("%d get %d" % (_idx, idx))
         feature = self.features[idx]
-        source_ids = self.__trunk([self.cls_id] + feature.source_ids, self.max_source_len, append_sep=self.mask_way != 'v0')
+        source_ids = self.__trunk([self.cls_id] + feature.source_ids, self.max_source_len)
         target_ids = feature.target_ids
         sep_token_id = sum([len(i) > 0  for i in target_ids])
 
@@ -131,42 +146,6 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
             num_source_tokens,
             num_target_tokens,
         )
-
-    def get_num_target_tokens_by_target_ids(self, target_ids: torch.Tensor):
-        return target_ids.shape[0]
-
-    def unnamed_method(self, target_ids: torch.Tensor):
-        # target_ids is two dimensional
-        num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
-
-        pseudo_ids = []
-        label_ids = []
-        for pos in range(num_target_tokens):
-            tk_id = target_ids[pos]
-            masked_tk_id = self.get_masked_token()
-            pseudo_ids.append(masked_tk_id)
-            label_ids.append(tk_id.clone())
-            r = random.random()
-            if r < self.target_mask_prob:
-                target_ids[pos] = 0
-                target_ids[pos][masked_tk_id] = 1
-        pseudo_ids = self.__pad(pseudo_ids, self.max_target_len)
-        label_ids = torch.stack(label_ids, dim=0)
-
-
-        p1d = (0, 0, 0, self.max_target_len - label_ids.shape[0])
-        label_ids = F.pad(label_ids, p1d, "constant", 0)  # effectively zero padding
-
-        p1d = (0, 0, 0, self.max_target_len - target_ids.shape[0])
-        target_ids = F.pad(target_ids, p1d, "constant", 0)  # effectively zero padding
-
-        return target_ids, label_ids, pseudo_ids
-
-    def __getitem__(self, _idx) -> Seq2seqDatasetForBertElementType:
-        if not self.soft_label:
-            raise NotImplementedError("Not implemented yet.")
-        
-        return self.soft_label_getitem(_idx)
 
 def batch_list_to_batch_tensors(batch: list[Seq2seqDatasetForBertElementType]):
     """
