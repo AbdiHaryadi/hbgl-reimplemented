@@ -7,11 +7,43 @@ from torch.optim import AdamW
 from transformers import BertForMaskedLM, BertTokenizer
 
 from args import HBGLTrainingArguments
-from hierarchy import LabelHierarchy
+from hierarchy import LabelHierarchy, LabelMapper
+
+def prepare_attention_mask(
+        hierarchy: LabelHierarchy,
+        label_mapper: LabelMapper,
+        label_cpt_use_bce=False
+):
+    # cls l1 l2 l3 sep
+    attention_mask = torch.zeros((len(label_mapper) + 2, len(label_mapper) + 2))
+    for parent_name, child_name in hierarchy.iter_parent_child_name_pairs():
+        parent_id = label_mapper.label_to_id(parent_name)
+        child_id = label_mapper.label_to_id(child_name)
+        # Here we use +1 because CLS is in index zero, and the first ID in hierarchy label is also zero.
+        attention_mask[parent_id + 1][child_id + 1] = 1
+        if label_cpt_use_bce:
+            attention_mask[child_id + 1][parent_id + 1] = 1
+
+    return attention_mask
+
+def get_num_hiers(hierarchy: LabelHierarchy, label_mapper: LabelMapper) -> dict[int, list[int]]:
+    num_hiers = defaultdict(list)
+    for parent, child in hierarchy.iter_parent_child_name_pairs():
+        num_hiers[label_mapper.label_to_id(parent) + 1].append(label_mapper.label_to_id(child) + 1)
+    return num_hiers
+
+def get_reversed_num_hiers(hierarchy: LabelHierarchy, label_mapper: LabelMapper) -> dict[int, int]:
+    reversed_num_hiers: dict[int, int] = {}
+    for parent, child in hierarchy.iter_parent_child_name_pairs():
+        reversed_num_hiers[label_mapper.label_to_id(child) + 1] = label_mapper.label_to_id(parent) + 1
+    return reversed_num_hiers
 
 @dataclass
 class GHLETrainingArguments:
-    model_name_or_path: str | None = None
+    model_name_or_path: str
+    label_mapper_path: str
+    hierarchy_path: str
+    
     max_source_seq_length: int = 464
     max_target_seq_length: int = 48
     adam_epsilon: float = 1e-8
@@ -25,8 +57,12 @@ class GHLETrainingArguments:
 
     @classmethod
     def from_args(cls, args: HBGLTrainingArguments):
+        assert args.add_vocab_file is not None
+        assert args.label_cpt is not None
         return cls(
             model_name_or_path=args.model_name_or_path,
+            label_mapper_path=args.add_vocab_file,
+            hierarchy_path=args.label_cpt,
             max_source_seq_length=args.max_source_seq_length,
             max_target_seq_length=args.max_target_seq_length,
             adam_epsilon=args.adam_epsilon,
@@ -43,18 +79,23 @@ class GHLETrainer:
             self,
             args: GHLETrainingArguments,
             tokenizer: BertTokenizer,
-            input_ids: torch.Tensor,
-            attention_mask: torch.Tensor,
-            position_ids: torch.Tensor,
-            hierarchy: LabelHierarchy,
     ):
         self.args = args
         self.tokenizer = tokenizer
-        self.input_ids = input_ids
-        self.attention_mask = attention_mask
-        self.position_ids = position_ids
-        self.num_hiers = hierarchy.get_num_hiers()
-        self.reversed_num_hiers = hierarchy.get_reversed_num_hiers()
+
+        hierarchy = LabelHierarchy.load(args.hierarchy_path)
+        label_mapper = LabelMapper.load(args.label_mapper_path)
+
+        self.num_hiers = get_num_hiers(hierarchy, label_mapper)
+        self.reversed_num_hiers = get_reversed_num_hiers(hierarchy, label_mapper)
+
+        self.attention_mask = prepare_attention_mask(hierarchy, label_mapper, args.use_bce)
+
+        self.input_ids = torch.tensor(tokenizer.encode(' '.join(label_mapper.get_all_tokens()).lower()), dtype=torch.long)
+        assert len(self.input_ids) == len(label_mapper) + 2
+
+        label_depth = {label: len(hierarchy.find_path(label)) for label in hierarchy.iter_unique_child_names()}
+        self.position_ids = torch.tensor([0, ] + [label_depth[label] for label in label_mapper.get_all_labels()] + [max(label_depth.values()) + 1,], dtype=torch.long)
 
         # Actually, we don't get the device from GHLETrainingArguments, so we duplicate the method from args.py
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -192,21 +233,3 @@ class GHLETrainer:
         optimizer.step()
         model.zero_grad()
         label_embeddings.grad = None
-
-def ghle_train(
-        args: HBGLTrainingArguments,
-        tokenizer: BertTokenizer,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        position_ids: torch.Tensor,
-        initial_label_embeddings: torch.Tensor,
-        hierarchy: LabelHierarchy,
-):
-    return GHLETrainer(
-        GHLETrainingArguments.from_args(args),
-        tokenizer,
-        input_ids,
-        attention_mask,
-        position_ids,
-        hierarchy,
-    ).train(initial_label_embeddings)

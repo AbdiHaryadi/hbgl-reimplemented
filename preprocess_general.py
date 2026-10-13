@@ -4,6 +4,8 @@ from typing import TypeVar
 
 import pandas as pd
 
+from hierarchy import LabelHierarchy, LabelMapper
+
 
 def clean_str(string):
     """
@@ -153,7 +155,7 @@ def transform_to_src_tgt(label_to_id_map: LabelToIdType, data: list[dict]):
 @dataclass
 class PreprocessorState:
     code_to_label_map: dict[tuple[int, str], str]
-    hierarchy: dict[str, list[str]]
+    parent_childs_map: dict[str, list[str]]
     label_to_id_map: LabelToIdType
 
 class Preprocessor:
@@ -166,16 +168,23 @@ class Preprocessor:
         data = data_df_to_data_list(df=df, config=self.config, code_to_label_map=code_to_label_map)
         self.state = PreprocessorState(
             code_to_label_map=code_to_label_map,
-            hierarchy=get_hierarchy_from_list(data),
+            parent_childs_map=get_hierarchy_from_list(data),
             label_to_id_map=make_label_to_id_map(data),
         )
         return self
 
     def transform(self, df: pd.DataFrame):
-        if self.state is None:
-            raise ValueError("Fit it first.")
+        assert self.state is not None, "Fit it first."
         data = data_df_to_data_list(df=df, config=self.config, code_to_label_map=self.state.code_to_label_map)
         return transform_to_src_tgt(label_to_id_map=self.state.label_to_id_map, data=data)
 
     def fit_transform(self, df: pd.DataFrame):
         return self.fit(df).transform(df)
+
+    def get_hierarchy(self):
+        assert self.state is not None, "Fit it first."
+        return LabelHierarchy(self.state.parent_childs_map)
+
+    def get_label_mapper(self):
+        assert self.state is not None, "Fit it first."
+        return LabelMapper(self.state.label_to_id_map)

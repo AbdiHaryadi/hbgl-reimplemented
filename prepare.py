@@ -5,10 +5,9 @@ import torch
 from transformers import BertConfig, BertTokenizer, RobertaConfig
 
 from args import HBGLTrainingArguments
-from hierarchy import LabelHierarchy
+from hierarchy import LabelHierarchy, LabelMapper
 import ghle
 from modeling import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
-from utils import id_to_label_token
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +93,7 @@ def _get_model_and_tokenizer(args: HBGLTrainingArguments):
         cache_dir=args.cache_dir if args.cache_dir else None)
 
     if args.add_vocab_file:
-        with open(args.add_vocab_file, 'rb') as f:
-            label_to_id_map: dict[str, int] = pickle.load(f)
-        label_tokens_start_index  = model.bert.embeddings.word_embeddings.num_embeddings
-        labels_key = list(label_to_id_map.keys())
+        label_mapper = LabelMapper.load(args.add_vocab_file)
         label_name_tensors = []
         max_l = -1
         if args.rcv1_expand:
@@ -106,25 +102,23 @@ def _get_model_and_tokenizer(args: HBGLTrainingArguments):
                 oi = [j for j in parent.replace('\n', '').split(' ') if len(j) > 0]
                 rcv1_label_expand[oi[3]] = parent.split('child-description: ')[-1].lower().replace('\n', '')
 
-        for lk in labels_key:
+        for label in label_mapper.get_all_labels():
             if args.one_by_one_label_init_map:
-                hiera = LabelHierarchy.load(args.one_by_one_label_init_map, label_to_id_map)
-                _label_index_map = hiera.get_label_index_map()
-
-                one_by_one_label_init_map = {}
-                for label in _label_index_map:
-                    one_by_one_label_init_map[label] = '/'.join(hiera.find_path(label))
-                print(f'map {lk} to {one_by_one_label_init_map[lk]}')
-                label_name_tensors.append(tokenizer.encode(one_by_one_label_init_map[lk], add_special_tokens=False))
+                one_by_one_label_init_map = (
+                    LabelHierarchy.load(args.one_by_one_label_init_map)
+                    .get_one_by_one_label_init_map()
+                )
+                print(f'map {label} to {one_by_one_label_init_map[label]}')
+                label_name_tensors.append(tokenizer.encode(one_by_one_label_init_map[label], add_special_tokens=False))
             elif args.nyt_only_last_label_init:
-                print(f'map {lk} to {lk.split("/")[-1]}')
-                label_name_tensors.append(tokenizer.encode(lk.split("/")[-1], add_special_tokens=False))
+                print(f'map {label} to {label.split("/")[-1]}')
+                label_name_tensors.append(tokenizer.encode(label.split("/")[-1], add_special_tokens=False))
             elif args.rcv1_expand:
-                print(f'map {lk} to {rcv1_label_expand[lk]}')
-                label_name_tensors.append(tokenizer.encode(rcv1_label_expand[lk], add_special_tokens=False))
+                print(f'map {label} to {rcv1_label_expand[label]}')
+                label_name_tensors.append(tokenizer.encode(rcv1_label_expand[label], add_special_tokens=False))
             else:
                 # When using BERT, lk should be lower()
-                label_name_tensors.append(tokenizer.encode(lk.lower(), add_special_tokens=False))
+                label_name_tensors.append(tokenizer.encode(label.lower(), add_special_tokens=False))
             max_l = max(len(label_name_tensors[-1]), max_l)
         label_name_tensors = torch.tensor([i + [tokenizer.pad_token_id] * (max_l - len(i)) for i in label_name_tensors], dtype=torch.long)
 
@@ -132,41 +126,26 @@ def _get_model_and_tokenizer(args: HBGLTrainingArguments):
             init_label_emb = model.bert.embeddings.word_embeddings(label_name_tensors)
             label_mask = label_name_tensors != tokenizer.pad_token_id
             init_label_emb = (label_mask.unsqueeze(-1) * init_label_emb).sum(1)
-        tokenizer.add_tokens([id_to_label_token(label_to_id_map[label]).lower() for label in labels_key])
+        tokenizer.add_tokens([token.lower() for token in label_mapper.get_all_tokens()])
 
         # for compare with same seed
         rng_state = torch.get_rng_state()
 
         if args.label_cpt:
-            hiera = LabelHierarchy.load(args.label_cpt, label_to_id_map)
-            _label_index_map = hiera.get_label_index_map()
-
-            label_depth = {token: len(hiera.find_path(token)) for token in _label_index_map}
-
-            # cls l1 l2 l3 sep
-            attention_mask = torch.zeros((len(label_to_id_map) + 2, len(label_to_id_map) + 2))
-            for parent_id, child_id in hiera.iter_hiera_parent_child_id_pairs():
-                # Here we use +1 because CLS is in index zero, and the first ID in hierarchy label is also zero.
-                attention_mask[parent_id + 1][child_id + 1] = 1
-                if args.label_cpt_use_bce:
-                    attention_mask[child_id + 1][parent_id + 1] = 1
-            
-            input_ids = torch.tensor(tokenizer.encode(' '.join([id_to_label_token(id_) for id_ in label_to_id_map.values()]).lower()), dtype=torch.long)
-            assert len(input_ids) == len(labels_key) + 2
-            position_ids = torch.tensor([0, ] + [label_depth[i] for i in labels_key] + [max(label_depth.values()) + 1,], dtype=torch.long)
-
-            init_label_emb = ghle.ghle_train(args, tokenizer, input_ids, attention_mask,
-                                            position_ids, init_label_emb, hiera).detach().cpu()
+            init_label_emb = ghle.GHLETrainer(
+                ghle.GHLETrainingArguments.from_args(args),
+                tokenizer,
+            ).train(init_label_emb)
 
         elif args.random_label_init:
-            init_label_emb = torch.nn.Embedding(len(label_to_id_map), model.config.hidden_size).weight.data
+            init_label_emb = torch.nn.Embedding(len(label_mapper), model.config.hidden_size).weight.data
 
         # for compare with same seed
         torch.set_rng_state(rng_state)
 
         model.concat_label_embeddings(init_label_emb)
         old_vocab_size = model.config.vocab_size
-        model.config.vocab_size = model.config.vocab_size + len(label_to_id_map)
+        model.config.vocab_size = model.config.vocab_size + len(label_mapper)
     else:
         old_vocab_size = model.config.vocab_size
 
