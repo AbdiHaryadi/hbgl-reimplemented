@@ -7,10 +7,11 @@ import pandas as pd
 from hierarchy import LabelHierarchy, LabelMapper
 
 
-def clean_str(string):
+def wos_text_transform(string: str):
     """
     Tokenization/string cleaning for all datasets except for SST.
     Original taken from https://github.com/yoonkim/CNN_sentence/blob/master/process_data.py
+    You should use it before using Preprocessor for WOS data.
     """
     string = string.strip().strip('"')
     string = re.sub(r"\'s", " \'s", string)
@@ -94,31 +95,6 @@ def generate_code_to_most_frequent_label_map(df: pd.DataFrame, config: Preproces
         for key, stats_per_key in stats.items()
     }
 
-def data_df_to_data_list(
-        df: pd.DataFrame,
-        config: PreprocessorConfig,
-        code_to_label_map: dict[tuple[int, str], str]
-):
-    data = []
-    for _, row in df.iterrows():
-        labels = []
-        for id_attribute in config.id_attribute_list:
-            label_list = []
-            for level_index, id_attribute_i in enumerate(id_attribute):
-                if pd.isna(row[id_attribute_i]):
-                    break
-
-                label_list.append(code_to_label_map[(
-                    level_index,
-                    str(row[id_attribute_i]).strip()
-                )])
-            labels.append(label_list)
-        
-        text = clean_str(row[config.text_attribute])
-        data.append({'text': text, 'labels': labels})
-
-    return data
-
 def get_hierarchy_from_list(data):
     label_hierarchy: dict[str, list[str]] = {}
     for instance in data:
@@ -165,7 +141,7 @@ class Preprocessor:
 
     def fit(self, df: pd.DataFrame):
         code_to_label_map = generate_code_to_most_frequent_label_map(df, config=self.config)
-        data = data_df_to_data_list(df=df, config=self.config, code_to_label_map=code_to_label_map)
+        data = self.data_df_to_data_list(df=df, code_to_label_map=code_to_label_map)
         self.state = PreprocessorState(
             code_to_label_map=code_to_label_map,
             parent_childs_map=get_hierarchy_from_list(data),
@@ -173,9 +149,36 @@ class Preprocessor:
         )
         return self
 
+    def data_df_to_data_list(
+            self,
+            df: pd.DataFrame,
+            code_to_label_map: dict[tuple[int, str], str],
+    ):
+        data: list[dict] = []
+        for _, row in df.iterrows():
+            labels = []
+            for id_attribute in self.config.id_attribute_list:
+                label_list = []
+                for level_index, id_attribute_i in enumerate(id_attribute):
+                    if pd.isna(row[id_attribute_i]):
+                        break
+    
+                    label_list.append(code_to_label_map[(
+                        level_index,
+                        str(row[id_attribute_i]).strip()
+                    )])
+                labels.append(label_list)
+            
+            data.append({
+                'text': row[self.config.text_attribute].strip().lower(),
+                'labels': labels
+            })
+    
+        return data
+
     def transform(self, df: pd.DataFrame):
         assert self.state is not None, "Fit it first."
-        data = data_df_to_data_list(df=df, config=self.config, code_to_label_map=self.state.code_to_label_map)
+        data = self.data_df_to_data_list(df=df, code_to_label_map=self.state.code_to_label_map)
         return transform_to_src_tgt(label_to_id_map=self.state.label_to_id_map, data=data)
 
     def fit_transform(self, df: pd.DataFrame):
