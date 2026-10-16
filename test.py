@@ -38,7 +38,7 @@ def detokenize(tk_list):
             r_list.append(tk)
     return r_list
 
-def main(args: HBGLTestingArguments):
+def test(args: HBGLTestingArguments):
     if args.max_tgt_length >= args.max_seq_length - 2:
         raise ValueError("Maximum tgt length exceeds max seq length - 2.")
 
@@ -263,4 +263,4 @@ def prepare_hier_labels(args, tokenizer, model):
     model.soft_label_hier_real = True
 
 if __name__ == "__main__":
-    print(main(parse_to_testing_arguments()))
+    print(test(parse_to_testing_arguments()))

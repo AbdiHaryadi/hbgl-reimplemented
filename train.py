@@ -284,7 +284,7 @@ class HBGLTrainer:
         if self.args.add_vocab_file is None:
             return None, None
     
-        out = test.main(HBGLTestingArguments(
+        out = test.test(HBGLTestingArguments(
             tokenizer_name=self.args.model_name_or_path,
             input_file=self.args.valid_file,
             split="valid",
