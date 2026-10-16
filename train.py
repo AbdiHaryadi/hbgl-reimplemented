@@ -66,18 +66,15 @@ def prepare_for_training(
         optimizer.load_state_dict(checkpoint_state_dict['optimizer'])
         model.load_state_dict(checkpoint_state_dict['model'])
 
-    # multi-gpu training
-    if args.n_gpu > 1:
-        new_model = torch.nn.DataParallel(model)
+    if args.local_rank != -1:
+        # Distributed training
+        new_model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+    elif args.n_gpu > 1:
+        # multi-gpu training
+        new_model = torch.nn.parallel.DistributedDataParallel(model)
     else:
         new_model = model
-
-
-    # Distributed training
-    if args.local_rank != -1:
-        new_model = torch.nn.parallel.DistributedDataParallel(
-            new_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
-    # else: no change
 
     return new_model, optimizer
 
@@ -318,10 +315,7 @@ class HBGLTrainer:
         else:
             return None, None
 
-def to_base_model(model: BertForSequenceToSequence | torch.nn.DataParallel[BertForSequenceToSequence] | torch.nn.parallel.DistributedDataParallel):
-    if isinstance(model, torch.nn.DataParallel):
-        return model.module
-    
+def to_base_model(model: BertForSequenceToSequence | torch.nn.parallel.DistributedDataParallel):
     if isinstance(model, torch.nn.parallel.DistributedDataParallel):
         base_model = model.module
         assert isinstance(base_model, BertForSequenceToSequence)

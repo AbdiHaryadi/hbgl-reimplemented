@@ -104,7 +104,7 @@ def test(args: HBGLTestingArguments):
 
         model.to(device)  # type: ignore
         if torch.cuda.device_count() > 1:
-            model = torch.nn.DataParallel(model)
+            model = torch.nn.parallel.DistributedDataParallel(model)
 
         output_lines = get_outputs(args, device, tokenizer, bi_uni_pipeline, model)
         if args.output_file:
@@ -153,7 +153,7 @@ def get_outputs(
         device: torch.device,
         tokenizer: BertTokenizer,
         bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
-        model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
+        model: BertForSeq2SeqDecoder | torch.nn.parallel.DistributedDataParallel,
 ):
     torch.cuda.empty_cache()
     model.eval()
