@@ -576,7 +576,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         device = output_ids[0][0].device
         _output_ids: list = [[] for _ in output_ids[0]]
-        max_l = 0
+        max_label_output_length = output_length - input_length
         for i, oi in enumerate(_output_ids):
             
             _output_ids[i] = torch.cat([j[i] for j in output_ids], dim=0)
@@ -584,10 +584,14 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             for index, d in enumerate(_output_ids[i].tolist()):
                 if d == 102: break
             _output_ids[i] = sorted(list(set(_output_ids[i].tolist()[:index])), reverse=True)
-            max_l = max(len(_output_ids[i]), max_l)
 
+        PAD_TOKEN_ID = 0
         for i, oi in enumerate(_output_ids):
-            _output_ids[i] = torch.tensor(oi + [0] * (max_l - len(oi)), dtype=torch.long, device=device).unsqueeze(0)
+            _output_ids[i] = torch.tensor(
+                oi + [PAD_TOKEN_ID] * (max_label_output_length - len(oi)),
+                dtype=torch.long,
+                device=device
+            ).unsqueeze(0)
         output_ids = _output_ids
         print("Debug:")
         for i, x in enumerate(output_ids):
