@@ -114,7 +114,7 @@ class GHLETrainer:
             print(f'step {step}', masked_lm_loss.item())
     
         torch.save(label_embeddings.cpu(), 'after.pt')
-        return label_embeddings
+        return label_embeddings.cpu()
 
     def load_model_for_train(self):
         model = BertForMaskedLM.from_pretrained(self.args.model_name_or_path)
