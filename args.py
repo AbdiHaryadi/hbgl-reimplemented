@@ -21,7 +21,6 @@ class HBGLTrainingArguments:
     max_source_seq_length: int = 464
     max_target_seq_length: int = 48
     cached_train_features_file: str | None = None
-    do_lower_case: bool = False
     per_gpu_train_batch_size: int = 8
     learning_rate: float = 5e-05
     gradient_accumulation_steps: int = 1
@@ -89,6 +88,7 @@ def parse_to_training_arguments(args=None):
     - --label_cpt_decodewithpos (always false)
     - --mask_way (always v2 [pseudo-masking])
     - --num_max_mask_token (not used)
+    - --do_lower_case
     """
 
     parser = argparse.ArgumentParser()
@@ -123,8 +123,6 @@ def parse_to_training_arguments(args=None):
 
     parser.add_argument("--cached_train_features_file", default=None, type=str,
                         help="Cached training features file")
-    parser.add_argument("--do_lower_case", action='store_true',
-                        help="Set this flag if you are using an uncased model.")
 
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
@@ -259,8 +257,6 @@ def parse_to_testing_arguments(args=None):
     parser.add_argument("--output_file", type=str, help="output file")
     parser.add_argument("--split", type=str, default="",
                         help="Data split (train/val/test).")
-    parser.add_argument("--do_lower_case", action='store_true',
-                        help="Set this flag if you are using an uncased model.")
     parser.add_argument('--batch_size', type=int, default=4,
                         help="Batch size for decoding.")
     parser.add_argument('--max_tgt_length', type=int, default=128,

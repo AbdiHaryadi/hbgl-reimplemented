@@ -37,7 +37,7 @@ def _get_model_and_tokenizer(args: HBGLTrainingArguments):
 
     tokenizer = BertTokenizer.from_pretrained(
         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-        do_lower_case=args.do_lower_case, cache_dir=args.cache_dir if args.cache_dir else None)
+        do_lower_case=True, cache_dir=args.cache_dir if args.cache_dir else None)
     assert isinstance(tokenizer.mask_token_id, int)
     assert isinstance(tokenizer.sep_token_id, int)
 
