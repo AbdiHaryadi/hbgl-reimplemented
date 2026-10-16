@@ -56,7 +56,7 @@ def setup_logging(args: HBGLTrainingArguments):
                    args.local_rank, args.device, args.n_gpu, bool(args.local_rank != -1))
 
 def setup_cuda_gpu_and_distributed_training(args: HBGLTrainingArguments):
-    if (args.local_rank != -1) and (not args.no_cuda):
+    if ((args.local_rank != -1) and (not args.no_cuda)) or args.n_gpu > 1:
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         torch.distributed.init_process_group(backend='nccl')

@@ -72,7 +72,6 @@ def prepare_for_training(
             model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     elif args.n_gpu > 1:
         # multi-gpu training
-        torch.distributed.init_process_group()
         new_model = torch.nn.parallel.DistributedDataParallel(model)
     else:
         new_model = model
