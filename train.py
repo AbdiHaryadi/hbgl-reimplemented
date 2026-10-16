@@ -13,7 +13,7 @@ import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments
 from modeling import BertForSequenceToSequence
-import test
+import test_model
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
 
 logger = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ class HBGLTrainer:
         if self.args.add_vocab_file is None:
             return None, None
     
-        out = test.test(HBGLTestingArguments(
+        out = test_model.test(HBGLTestingArguments(
             tokenizer_name=self.args.model_name_or_path,
             input_file=self.args.valid_file,
             split="valid",

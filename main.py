@@ -10,7 +10,7 @@ import wandb
 from args import HBGLTestingArguments, HBGLTrainingArguments, parse_to_training_arguments
 from prepare import get_model_and_tokenizer
 from train import HBGLTrainer
-from test import test as test_main
+from test_model import test as test_main
 from utils import TrainingExample, load_and_cache_examples
 
 LOGLEVEL = os.environ.get('LOGLEVEL', 'INFO').upper()
