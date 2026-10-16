@@ -413,12 +413,6 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             attention_mask: torch.Tensor,
             task_idx: torch.Tensor | None = None,
     ):
-        print("Debug:")
-        print("input_ids:", input_ids.shape)
-        print("token_type_ids:", token_type_ids.shape)
-        print("position_ids:", position_ids.shape)
-        print("attention_mask:", attention_mask.shape)
-
         batch_size = input_ids.size(dim=0)
         input_length = input_ids.size(dim=1)
         output_length = token_type_ids.size(dim=1)
@@ -593,8 +587,4 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 device=device
             ).unsqueeze(0)
         output_ids = _output_ids
-        print("Debug:")
-        for i, x in enumerate(output_ids):
-            print(f"Element {i}: {x.shape}")
-        print("Output shape:", torch.cat(output_ids, dim=0).shape)
         return torch.cat(output_ids, dim=0)
