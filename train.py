@@ -158,7 +158,7 @@ class HBGLTrainer:
         else:
             checkpoint_state_dict = None
     
-        base_model.to(args.device)  # type: ignore
+        base_model.to(self.args.device)  # type: ignore
         model, optimizer = prepare_for_training(self.args, base_model, checkpoint_state_dict)
     
         per_node_train_batch_size = self.args.per_gpu_train_batch_size * self.args.n_gpu * self.args.gradient_accumulation_steps
@@ -175,7 +175,14 @@ class HBGLTrainer:
         if checkpoint_state_dict:
             scheduler.load_state_dict(checkpoint_state_dict["lr_scheduler"])
     
-        train_dataset = create_train_dataset(args, training_features, model, tokenizer, train_batch_size, global_step)  # type: ignore
+        train_dataset = create_train_dataset(
+            self.args,
+            training_features,
+            model,  # type: ignore
+            tokenizer,
+            train_batch_size,
+            global_step
+        )
     
         # Train!
         logger.info("  ***** Running training *****  *")
