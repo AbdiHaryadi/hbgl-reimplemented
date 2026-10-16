@@ -570,7 +570,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         device = output_ids[0][0].device
         _output_ids: list = [[] for _ in output_ids[0]]
-        max_label_output_length = output_length - input_length
+        MAX_LABEL_OUTPUT_LENGTH = 10
         for i, oi in enumerate(_output_ids):
             
             _output_ids[i] = torch.cat([j[i] for j in output_ids], dim=0)
@@ -581,10 +581,15 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         PAD_TOKEN_ID = 0
         for i, oi in enumerate(_output_ids):
+            padded = oi + [PAD_TOKEN_ID] * (MAX_LABEL_OUTPUT_LENGTH - len(oi))
+            if len(oi) > MAX_LABEL_OUTPUT_LENGTH:
+                print(f"Warning: It's possible to get higher length like {len(oi)}. Increase max label output length in the future")
+                padded = padded[:MAX_LABEL_OUTPUT_LENGTH]
             _output_ids[i] = torch.tensor(
-                oi + [PAD_TOKEN_ID] * (max_label_output_length - len(oi)),
+                padded,
                 dtype=torch.long,
                 device=device
             ).unsqueeze(0)
+
         output_ids = _output_ids
         return torch.cat(output_ids, dim=0)
