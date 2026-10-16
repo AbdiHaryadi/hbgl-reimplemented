@@ -5,12 +5,11 @@ import random
 
 import numpy as np
 import torch
-from transformers import BertTokenizer
 import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments, parse_to_training_arguments
 from prepare import get_model_and_tokenizer
-from train import train
+from train import HBGLTrainer
 from test import main as test_main
 from utils import TrainingExample, load_and_cache_examples
 
@@ -134,7 +133,8 @@ def main():
     )
     if args.add_vocab_file:
         assert_correct_target_id(old_vocab_size, training_features)
-    best_macro_f1_path, best_micro_f1_path = train(args, training_features, model, tokenizer)
+    trainer = HBGLTrainer(args)
+    best_macro_f1_path, best_micro_f1_path = trainer.train(training_features, model, tokenizer)
     if args.test_file:
         test(args, best_macro_f1_path, best_micro_f1_path)
 

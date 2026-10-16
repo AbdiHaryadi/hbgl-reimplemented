@@ -13,14 +13,21 @@ def wos_text_transform(string: str):
     Original taken from https://github.com/yoonkim/CNN_sentence/blob/master/process_data.py
     You should use it before using Preprocessor for WOS data.
     """
+    # Remove leading and trailing spaces, then removing leading and trailing double quotes
     string = string.strip().strip('"')
+
+    # Add space before particles
     string = re.sub(r"\'s", " \'s", string)
     string = re.sub(r"\'ve", " \'ve", string)
     string = re.sub(r"n\'t", " n\'t", string)
     string = re.sub(r"\'re", " \'re", string)
     string = re.sub(r"\'d", " \'d", string)
     string = re.sub(r"\'ll", " \'ll", string)
+
+    # Convert double or more whitespaces into single space
     string = re.sub(r"\s{2,}", " ", string)
+
+    # Remove leading and trailing spaces, then lowercase
     return string.strip().lower()
 
 class PreprocessorConfig:
