@@ -525,7 +525,7 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
             self.cls.predictions.bias.data,
             torch.zeros(label_embeddings.shape[0])
         ], dim=0)
-        self.config.vocab_size = label_embeddings.shape[0]
+        self.config.vocab_size += label_embeddings.shape[0]
 
         assert self.cls.predictions.decoder.weight is self.bert.embeddings.word_embeddings.weight
         assert self.cls.predictions.decoder.bias is self.cls.predictions.bias
