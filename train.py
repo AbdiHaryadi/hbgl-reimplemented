@@ -178,7 +178,7 @@ class HBGLTrainer:
         train_dataset = create_train_dataset(
             self.args,
             training_features,
-            model,  # type: ignore
+            to_base_model(model),
             tokenizer,
             train_batch_size,
             global_step
@@ -266,7 +266,7 @@ class HBGLTrainer:
                     if self.args.local_rank in [-1, 0] and self.args.save_steps > 0 and \
                             (global_step % self.args.save_steps == 0 or global_step == self.args.num_training_steps):
 
-                        save_path = save_step(self.args, model, optimizer, global_step, scheduler)
+                        save_path = save_step(self.args, to_base_model(model), optimizer, global_step, scheduler)
                         new_macro_f1, new_micro_f1  = self.evaluate_step(save_path)
                         if self.args.wandb:
                             wandb.log({'eval/macro_f1': new_macro_f1, 'eval/micro_f1': new_micro_f1})
@@ -318,24 +318,27 @@ class HBGLTrainer:
         else:
             return None, None
 
-# torch.nn.DataParallel
+def to_base_model(model: BertForSequenceToSequence | torch.nn.DataParallel[BertForSequenceToSequence] | torch.nn.parallel.DistributedDataParallel):
+    if isinstance(model, torch.nn.DataParallel):
+        return model.module
+    
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        base_model = model.module
+        assert isinstance(base_model, BertForSequenceToSequence)
+        return base_model
+    
+    return model
+
 def save_step(
         args: HBGLTrainingArguments,
-        model: BertForSequenceToSequence | torch.nn.DataParallel[BertForSequenceToSequence] | torch.nn.parallel.DistributedDataParallel,
+        model: BertForSequenceToSequence,
         optimizer: AdamW,
         global_step: int,
         scheduler: torch.optim.lr_scheduler.LRScheduler,
 ):
     save_path = os.path.join(args.output_dir, "ckpt-%d" % global_step)
     os.makedirs(save_path, exist_ok=True)
-    if isinstance(model, torch.nn.DataParallel):
-        model_to_save = model.module
-    elif isinstance(model, torch.nn.parallel.DistributedDataParallel):
-        model_to_save = model.module
-        assert isinstance(model_to_save, BertForSequenceToSequence)
-    else:
-        model_to_save = model
-    model_to_save.save_pretrained(save_path)
+    model.save_pretrained(save_path)
 
     optim_to_save = {
         "optimizer": optimizer.state_dict(),
