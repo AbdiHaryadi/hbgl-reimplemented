@@ -14,7 +14,7 @@ import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments
 from config import BertForSeq2SeqConfig
-from modeling import BertForSequenceToSequence
+from modeling import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
 import test_model
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
 
@@ -152,7 +152,7 @@ class HBGLTrainer:
                 self.args.output_dir,
                 recover_step
             )
-            base_model = BertForSequenceToSequence.from_pretrained(
+            base_model = BertForSequenceToSequenceWithPseudoMask.from_pretrained(
                 os.path.join(self.args.output_dir, "ckpt-%d" % recover_step),
                 config=BertForSeq2SeqConfig.from_pretrained(
                     os.path.join(self.args.output_dir, "ckpt-%d" % recover_step)
