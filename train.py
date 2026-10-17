@@ -14,6 +14,7 @@ import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments
 from config import BertForSeq2SeqConfig
+from hierarchy import LabelMapper
 from modeling import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
 import test_model
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
@@ -158,6 +159,12 @@ class HBGLTrainer:
                     os.path.join(self.args.output_dir, "ckpt-%d" % recover_step)
                 )
             )
+            assert isinstance(tokenizer.mask_token_id, int)
+            assert isinstance(tokenizer.sep_token_id, int)
+            base_model.mask_token_id = tokenizer.mask_token_id
+            base_model.sep_token_id = tokenizer.sep_token_id
+            base_model.text_vocab_size = base_model.config.vocab_size - len(LabelMapper.load(self.args.add_vocab_file))
+            print(base_model.text_vocab_size)
             print("Warning: passed base_model is unused")
         else:
             checkpoint_state_dict = None
