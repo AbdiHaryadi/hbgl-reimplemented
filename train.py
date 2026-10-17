@@ -13,6 +13,7 @@ from transformers import BertTokenizer, get_linear_schedule_with_warmup
 import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments
+from config import BertForSeq2SeqConfig
 from modeling import BertForSequenceToSequence
 import test_model
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
@@ -42,24 +43,29 @@ def load_model_state_dict(path):
 def get_checkpoint_state_dict(output_dir, ckpt):
     model_recover_checkpoint = os.path.join(output_dir, "ckpt-%d" % ckpt, WEIGHTS_NAME)
     logger.info(" ** Recover model checkpoint in %s ** ", model_recover_checkpoint)
-    model_state_dict = load_model_state_dict(model_recover_checkpoint)
     optimizer_recover_checkpoint = os.path.join(output_dir, "ckpt-%d" % ckpt, OPTIM_NAME)
     checkpoint_state_dict = torch.load(optimizer_recover_checkpoint, map_location='cpu')
-    checkpoint_state_dict['model'] = model_state_dict
     return checkpoint_state_dict
 
-def prepare_for_training(
+def prepare_model(args: HBGLTrainingArguments, model: BertForSequenceToSequence):
+    # multi-gpu training
+    if args.n_gpu > 1:
+        new_model = torch.nn.DataParallel(model)
+    else:
+        new_model = model
+
+    # Distributed training
+    if args.local_rank != -1:
+        new_model = torch.nn.parallel.DistributedDataParallel(
+            new_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+    # else: no change
+    return new_model
+
+def prepare_optimizer(
         args: HBGLTrainingArguments,
         model: BertForSequenceToSequence,
         checkpoint_state_dict
 ):
-    """
-    https://github.com/kongds/HBGL/blob/master/run.py
-
-    Remove:
-    - amp things
-    """
-
     no_decay = ['bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
         {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
@@ -70,22 +76,7 @@ def prepare_for_training(
 
     if checkpoint_state_dict:
         optimizer.load_state_dict(checkpoint_state_dict['optimizer'])
-        model.load_state_dict(checkpoint_state_dict['model'])
-
-    # multi-gpu training
-    if args.n_gpu > 1:
-        new_model = torch.nn.DataParallel(model)
-    else:
-        new_model = model
-
-
-    # Distributed training
-    if args.local_rank != -1:
-        new_model = torch.nn.parallel.DistributedDataParallel(
-            new_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
-    # else: no change
-
-    return new_model, optimizer
+    return optimizer
 
 class HBGLLossLogger:
     def __init__(self, args: HBGLTrainingArguments):
@@ -161,11 +152,21 @@ class HBGLTrainer:
                 self.args.output_dir,
                 recover_step
             )
+            base_model = BertForSequenceToSequence.from_pretrained(
+                os.path.join(self.args.output_dir, "ckpt-%d" % recover_step),
+                config=BertForSeq2SeqConfig.from_pretrained(
+                    os.path.join(self.args.output_dir, "ckpt-%d" % recover_step)
+                )
+            )
+            print("Warning: passed base_model is unused")
         else:
             checkpoint_state_dict = None
     
         base_model.to(self.args.device)  # type: ignore
-        model, optimizer = prepare_for_training(self.args, base_model, checkpoint_state_dict)
+
+        # Remove amp things
+        optimizer = prepare_optimizer(self.args, base_model, checkpoint_state_dict)
+        model = prepare_model(self.args, base_model)
     
         per_node_train_batch_size = self.args.per_gpu_train_batch_size * self.args.n_gpu * self.args.gradient_accumulation_steps
         train_batch_size = per_node_train_batch_size * (torch.distributed.get_world_size() if self.args.local_rank != -1 else 1)
