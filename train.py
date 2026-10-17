@@ -349,6 +349,9 @@ class HBGLTrainer:
     def evaluate_step(self, save_path: str):
         if self.args.add_vocab_file is None:
             return None, None
+
+        if self.args.valid_file is None:
+            return None, None
     
         out = test_model.test(HBGLTestingArguments(
             tokenizer_name=self.args.model_name_or_path,

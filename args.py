@@ -6,10 +6,11 @@ import torch
 @dataclass
 class HBGLTrainingArguments:
     # Required parameters
-    train_file: str
-    valid_file: str
     model_name_or_path: str
     output_dir: str
+
+    train_file: str | None = None
+    valid_file: str | None = None
 
     # Other parameters
     test_file: str | None = None
