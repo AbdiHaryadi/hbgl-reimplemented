@@ -35,9 +35,9 @@ def prepare(args: HBGLTrainingArguments):
 def init_wandb_if_needed(args: HBGLTrainingArguments):
     if (not args.only_test) and args.wandb:
         wandb.init(
-                project="HBGL",
-                name=args.output_dir.split('/')[-1],
-            )
+            project="HBGL",
+            name=args.output_dir.split('/')[-1],
+        )
         wandb.define_metric("train/global_step")
         wandb.define_metric("*", step_metric="train/global_step", step_sync=True)
 
