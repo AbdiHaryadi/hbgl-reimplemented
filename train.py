@@ -344,7 +344,7 @@ def save_step(
 ):
     save_path = os.path.join(args.output_dir, "ckpt-%d" % global_step)
     os.makedirs(save_path, exist_ok=True)
-    model.save_pretrained(save_path)
+    model.save_pretrained(save_path, save_original_format=False)
 
     optim_to_save = {
         "optimizer": optimizer.state_dict(),
