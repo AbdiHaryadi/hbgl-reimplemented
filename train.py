@@ -4,6 +4,7 @@ import math
 import os
 import shutil
 
+import safetensors.torch
 import torch
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, DistributedSampler, SequentialSampler
@@ -19,7 +20,7 @@ from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_te
 logger = logging.getLogger(__name__)
 
 OPTIM_NAME = "optimizer.bin"
-WEIGHTS_NAME = 'pytorch_model.bin'
+WEIGHTS_NAME = 'model.safetensors'
 
 def get_max_epoch_model(output_dir):
     fn_model_list = glob.glob(os.path.join(output_dir, "ckpt-*/%s" % WEIGHTS_NAME))
@@ -33,10 +34,15 @@ def get_max_epoch_model(output_dir):
     else:
         return None
 
+def load_model_state_dict(path):
+    with open(path, "rb") as f:
+        b = f.read()
+    return safetensors.torch.load(b)
+
 def get_checkpoint_state_dict(output_dir, ckpt):
     model_recover_checkpoint = os.path.join(output_dir, "ckpt-%d" % ckpt, WEIGHTS_NAME)
     logger.info(" ** Recover model checkpoint in %s ** ", model_recover_checkpoint)
-    model_state_dict = torch.load(model_recover_checkpoint, map_location='cpu')
+    model_state_dict = load_model_state_dict(model_recover_checkpoint)
     optimizer_recover_checkpoint = os.path.join(output_dir, "ckpt-%d" % ckpt, OPTIM_NAME)
     checkpoint_state_dict = torch.load(optimizer_recover_checkpoint, map_location='cpu')
     checkpoint_state_dict['model'] = model_state_dict
