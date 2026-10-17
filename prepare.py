@@ -1,4 +1,5 @@
 import logging
+from typing import Callable, TypeVar
 
 import torch
 from transformers import BertConfig, BertTokenizer
@@ -11,18 +12,21 @@ from modeling import BertForSequenceToSequence, BertForSequenceToSequenceWithPse
 
 logger = logging.getLogger(__name__)
 
-def get_model_and_tokenizer(args: HBGLTrainingArguments):
+T = TypeVar('T')
+def distributed_barrier_wrapper(args: HBGLTrainingArguments, func: Callable[[HBGLTrainingArguments], T]):
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
         # Make sure only the first process in distributed training will download model & vocab
-    # Load pretrained model and tokenizer
-    model, tokenizer, old_vocab_size = _get_model_and_tokenizer(args)
+    result = func(args)
 
     if args.local_rank == 0:
         torch.distributed.barrier()
         # Make sure only the first process in distributed training will download model & vocab
 
-    return model,tokenizer,old_vocab_size
+    return result
+
+def get_model_and_tokenizer(args: HBGLTrainingArguments):
+    return distributed_barrier_wrapper(args, _get_model_and_tokenizer)
 
 def _get_model_and_tokenizer(args: HBGLTrainingArguments):
     model_config = BertConfig.from_pretrained(
@@ -35,7 +39,7 @@ def _get_model_and_tokenizer(args: HBGLTrainingArguments):
 
     logger.info("Model config for seq2seq: %s", str(config))
 
-    tokenizer = BertTokenizer.from_pretrained(
+    tokenizer: BertTokenizer = BertTokenizer.from_pretrained(
         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
         do_lower_case=True, cache_dir=args.cache_dir if args.cache_dir else None)
     assert isinstance(tokenizer.mask_token_id, int)
@@ -75,6 +79,20 @@ def _get_model_and_tokenizer(args: HBGLTrainingArguments):
     model.text_vocab_size = text_vocab_size
 
     return model, tokenizer, text_vocab_size
+
+def _get_tokenizer(args: HBGLTrainingArguments):
+    tokenizer: BertTokenizer = BertTokenizer.from_pretrained(
+        args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
+        do_lower_case=True, cache_dir=args.cache_dir if args.cache_dir else None)
+
+    if args.add_vocab_file:
+        label_mapper = LabelMapper.load(args.add_vocab_file)
+        tokenizer.add_tokens([token.lower() for token in label_mapper.get_all_tokens()])
+
+    return tokenizer
+
+def get_tokenizer(args: HBGLTrainingArguments):
+    return distributed_barrier_wrapper(args, _get_tokenizer)
 
 def init_label_name_from_averaging(
         args: HBGLTrainingArguments,
