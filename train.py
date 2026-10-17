@@ -372,6 +372,12 @@ class HBGLTrainer:
 class InterruptableHBGLTrainer(HBGLTrainer):
     def __init__(self, args: HBGLTrainingArguments, interrupt_steps: int):
         super().__init__(args)
+        self.interrupt_steps = interrupt_steps
+
+    def after_evaluate_step(self):
+        super().after_evaluate_step()
+        if self.get_current_global_step() >= self.interrupt_steps:
+            raise ValueError("Interrupt!")
 
 def to_base_model(model: BertForSequenceToSequence | torch.nn.DataParallel[BertForSequenceToSequence] | torch.nn.parallel.DistributedDataParallel):
     if isinstance(model, torch.nn.DataParallel):
