@@ -132,11 +132,32 @@ class BestModelManager:
 
         return keep_save_model
 
+class GlobalStepManager:
+    def __init__(self, args: HBGLTrainingArguments):
+        recover_step = get_max_epoch_model(args.output_dir)
+        if recover_step is None:
+            self.global_step = 0
+        else:
+            self.global_step = recover_step
+
+    def get(self):
+        return self.global_step
+
+    def increment(self):
+        self.global_step += 1
+
 class HBGLTrainer:
     def __init__(self, args: HBGLTrainingArguments):
         self.args = args
         self.loss_logger = HBGLLossLogger(args)
         self.model_manager = BestModelManager()
+        self.global_step_manager = GlobalStepManager(args)
+
+    def get_current_global_step(self):
+        return self.global_step_manager.get()
+
+    def increment_global_step(self):
+        self.global_step_manager.increment()
 
     def train(
             self,
@@ -169,7 +190,6 @@ class HBGLTrainer:
     
         per_node_train_batch_size = self.args.per_gpu_train_batch_size * self.args.n_gpu * self.args.gradient_accumulation_steps
         train_batch_size = per_node_train_batch_size * (torch.distributed.get_world_size() if self.args.local_rank != -1 else 1)
-        global_step = recover_step if recover_step else 0
     
         if self.args.num_training_steps == -1:
             self.args.num_training_steps = self.args.num_training_epochs * math.ceil(len(training_features) / train_batch_size)
@@ -187,7 +207,7 @@ class HBGLTrainer:
             to_base_model(model),
             tokenizer,
             train_batch_size,
-            global_step
+            self.get_current_global_step(),
         )
     
         # Train!
@@ -200,7 +220,7 @@ class HBGLTrainer:
         logger.info("  Gradient Accumulation steps = %d", self.args.gradient_accumulation_steps)
         logger.info("  Total optimization steps = %d", self.args.num_training_steps)
     
-        if self.args.num_training_steps <= global_step:
+        if self.args.num_training_steps <= self.get_current_global_step():
             logger.info("Training is done. Please use a new dir or clean this dir!")
         else:
             # The training features are shuffled
@@ -212,14 +232,14 @@ class HBGLTrainer:
                 collate_fn=batch_list_to_batch_tensors)
     
             train_iterator = tqdm(
-                train_dataloader, initial=global_step * self.args.gradient_accumulation_steps,
+                train_dataloader, initial=self.get_current_global_step() * self.args.gradient_accumulation_steps,
                 desc="Iter (loss=X.XXX, lr=X.XXXXXXX)", disable=self.args.local_rank not in [-1, 0])
     
             model.train()
             model.zero_grad()
     
             for step, batch in enumerate(train_iterator):
-                if global_step > self.args.num_training_steps:
+                if self.get_current_global_step() > self.args.num_training_steps:
                     break
                 batch = tuple(t.to(self.args.device) for t in batch)
                 (
@@ -265,14 +285,12 @@ class HBGLTrainer:
                     optimizer.step()
                     scheduler.step()  # Update learning rate schedule
                     model.zero_grad()
-                    global_step += 1
+                    self.increment_global_step()
     
-                    self.loss_logger.log_if_needed(global_step)
+                    self.log_loss_if_needed()
     
-                    if self.args.local_rank in [-1, 0] and self.args.save_steps > 0 and \
-                            (global_step % self.args.save_steps == 0 or global_step == self.args.num_training_steps):
-
-                        save_path = save_step(self.args, to_base_model(model), optimizer, global_step, scheduler)
+                    if self.args.local_rank in [-1, 0] and self.is_save_step_time():
+                        save_path = self.save_step(to_base_model(model), optimizer, scheduler)
                         new_macro_f1, new_micro_f1  = self.evaluate_step(save_path)
                         if self.args.wandb:
                             wandb.log({'eval/macro_f1': new_macro_f1, 'eval/micro_f1': new_micro_f1})
@@ -288,6 +306,33 @@ class HBGLTrainer:
                         self.after_evaluate_step()
     
         return self.model_manager.best_macro_f1_path, self.model_manager.best_micro_f1_path
+
+    def is_save_step_time(self):
+        return self.args.save_steps > 0 and (
+            self.get_current_global_step() % self.args.save_steps == 0
+            or self.get_current_global_step() == self.args.num_training_steps
+        )
+
+    def save_step(
+            self,
+            model: BertForSequenceToSequence,
+            optimizer: AdamW,
+            scheduler: torch.optim.lr_scheduler.LRScheduler
+    ):
+        save_path = os.path.join(self.args.output_dir, "ckpt-%d" % self.get_current_global_step())
+        os.makedirs(save_path, exist_ok=True)
+        model.save_pretrained(save_path)
+    
+        optim_to_save = {
+            "optimizer": optimizer.state_dict(),
+            "lr_scheduler": scheduler.state_dict(),
+        }
+        torch.save(optim_to_save, os.path.join(save_path, OPTIM_NAME))
+        logger.info("Saving model checkpoint %d into %s", self.get_current_global_step(), save_path)
+        return save_path
+
+    def log_loss_if_needed(self):
+        self.loss_logger.log_if_needed(self.get_current_global_step())
 
     def after_evaluate_step(self):
         print('best micro', self.model_manager.best_micro_f1_path, self.model_manager.best_micro_f1_score)
@@ -324,6 +369,10 @@ class HBGLTrainer:
         else:
             return None, None
 
+class InterruptableHBGLTrainer(HBGLTrainer):
+    def __init__(self, args: HBGLTrainingArguments, interrupt_steps: int):
+        super().__init__(args)
+
 def to_base_model(model: BertForSequenceToSequence | torch.nn.DataParallel[BertForSequenceToSequence] | torch.nn.parallel.DistributedDataParallel):
     if isinstance(model, torch.nn.DataParallel):
         return model.module
@@ -334,25 +383,6 @@ def to_base_model(model: BertForSequenceToSequence | torch.nn.DataParallel[BertF
         return base_model
     
     return model
-
-def save_step(
-        args: HBGLTrainingArguments,
-        model: BertForSequenceToSequence,
-        optimizer: AdamW,
-        global_step: int,
-        scheduler: torch.optim.lr_scheduler.LRScheduler,
-):
-    save_path = os.path.join(args.output_dir, "ckpt-%d" % global_step)
-    os.makedirs(save_path, exist_ok=True)
-    model.save_pretrained(save_path)
-
-    optim_to_save = {
-        "optimizer": optimizer.state_dict(),
-        "lr_scheduler": scheduler.state_dict(),
-    }
-    torch.save(optim_to_save, os.path.join(save_path, OPTIM_NAME))
-    logger.info("Saving model checkpoint %d into %s", global_step, save_path)
-    return save_path
 
 def create_train_dataset(
         args: HBGLTrainingArguments,
