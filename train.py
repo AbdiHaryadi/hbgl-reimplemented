@@ -154,7 +154,7 @@ class HBGLTrainer:
     def train(
             self,
             training_features: list[TrainingExample],
-            base_model: BertForSequenceToSequence,
+            base_model: BertForSequenceToSequence | None,
             tokenizer: BertTokenizer,
     ):
         """
@@ -187,8 +187,10 @@ class HBGLTrainer:
             base_model.text_vocab_size = base_model.config.vocab_size - len(LabelMapper.load(self.args.add_vocab_file))
             print(base_model.text_vocab_size)
             print("Warning: passed base_model is unused")
-        else:
+        elif base_model is not None:
             checkpoint_state_dict = None
+        else:
+            raise ValueError("No recover step, and base_model is not given.")
     
         base_model.to(self.args.device)  # type: ignore
 
