@@ -427,6 +427,9 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         self.hier_labels = None
         self.soft_label_hier_real = False
 
+        self.last_attention_probs_list = None
+        self.last_score_list: list[torch.Tensor] | None = None
+
         self.post_init()
 
     def forward(
@@ -464,6 +467,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         self._output_ids: list[list[torch.Tensor]] = []
         attention_probs_list = []
+        score_list: list[torch.Tensor] = []
 
         # Case when curr_ids is NOT NONE (curr_ids = input_ids)
         # AND next_pos == input_length
@@ -490,8 +494,9 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         )
         attention_probs_list.append(self.bert.get_last_attention_probs_in_last_layer())
         assert isinstance(new_embedding, torch.Tensor)
-        pred_embeds, pred_ids = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
+        pred_embeds, pred_ids, prediction_scores = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
         self._output_ids.append(pred_ids)
+        score_list.append(prediction_scores)
 
         prev_embedding = self.concat_embedding_or_layer(None, new_embedding)
         prev_encoded_layers = self.concat_layers(None, new_encoded_layers)
@@ -524,14 +529,16 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             )
             assert isinstance(new_embedding, torch.Tensor)
             attention_probs_list.append(self.bert.get_last_attention_probs_in_last_layer())
-            pred_embeds, pred_ids = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
+            pred_embeds, pred_ids, prediction_scores = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
             self._output_ids.append(pred_ids)
+            score_list.append(prediction_scores)
 
             prev_embedding = self.concat_embedding_or_layer(prev_embedding, new_embedding)
             prev_encoded_layers = self.concat_layers(prev_encoded_layers, new_encoded_layers)
             next_pos += 1
 
         self.last_attention_probs_list = attention_probs_list
+        self.last_score_list = score_list
         return self._output_ids
 
     def concat_embedding_or_layer(self, prev_embedding: torch.Tensor | None, new_embedding: torch.Tensor):
@@ -555,10 +562,10 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
     def get_new_pred_embeds_and_pred_ids(self, new_encoded_layers):
         last_hidden: torch.Tensor = new_encoded_layers[-1][:, -1:, :]
         prediction_scores = self.get_prediction_scores(last_hidden)
-        prediction_scores = torch.sigmoid(prediction_scores) > 0.5
-        pred_ids = self.get_pred_ids(prediction_scores)
-        pred_embeds = self.get_pred_embeds(prediction_scores)
-        return pred_embeds, pred_ids
+        predictions = torch.sigmoid(prediction_scores) > 0.5
+        pred_ids = self.get_pred_ids(predictions)
+        pred_embeds = self.get_pred_embeds(predictions)
+        return pred_embeds, pred_ids, prediction_scores
 
     def get_prediction_scores(self, last_hidden: torch.Tensor):
         if self.soft_label_hier_real and self.hier_labels is not None:
@@ -573,11 +580,12 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                                             prediction_scores[:, :, lsi:]], dim=-1)
         return prediction_scores
 
-    def get_pred_ids(self, prediction_scores: torch.Tensor):
+    def get_pred_ids(self, predictions: torch.Tensor):
+        # Predictions are binary.
         _pred_ids: list[torch.Tensor] = []
-        device = prediction_scores.device
-        for i in range(prediction_scores.shape[0]):
-            pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
+        device = predictions.device
+        for i in range(predictions.shape[0]):
+            pred_ids = torch.arange(predictions.shape[-1], device=device)[predictions[i, -1]]
             sep_mask = pred_ids == 0
             pred_ids[sep_mask] = self.eos_id
             if self.soft_label_hier_real and self.hier_labels is not None:
@@ -589,15 +597,16 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             _pred_ids.append(pred_ids)
         return _pred_ids
 
-    def get_pred_embeds(self, prediction_scores: torch.Tensor):
+    def get_pred_embeds(self, predictions: torch.Tensor):
+        # Predictions are binary.
         if self.soft_label_hier_real and self.hier_labels is not None:
             hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
-            pred_embeds =  prediction_scores.float() @ torch.cat(
+            pred_embeds =  predictions.float() @ torch.cat(
                             [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
                             self.bert.embeddings.word_embeddings.weight.data[hl]], dim=0)
         else:
             lsi = self.label_start_index
-            pred_embeds =  prediction_scores.float() @ torch.cat(
+            pred_embeds =  predictions.float() @ torch.cat(
                             [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
                             self.bert.embeddings.word_embeddings.weight.data[lsi:]], dim=0)
 
@@ -631,8 +640,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             index = 10000
             for index, d in enumerate(temp.tolist()):
                 if d == 102: break
-            temp2 = sorted(list(set(temp.tolist()[:index])), reverse=True)
-            _output_ids[i] = temp2
+            _output_ids[i] = sorted(list(set(temp.tolist()[:index])), reverse=True)
         return _output_ids
 
     def output_ids_postprocess_2(self, temp: list[list[int]], device: torch.device):
@@ -647,3 +655,9 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
                 padded = padded[:MAX_LABEL_OUTPUT_LENGTH]
             _output_ids.append(torch.tensor(padded, dtype=torch.long, device=device).unsqueeze(0))
         return _output_ids
+
+    def get_last_attention_probs_list(self):
+        return self.last_attention_probs_list
+
+    def get_last_score_list(self):
+        return self.last_score_list
