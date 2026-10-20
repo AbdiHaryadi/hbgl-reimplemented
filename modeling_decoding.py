@@ -8,7 +8,6 @@ from __future__ import print_function
 from itertools import repeat
 import math
 import logging
-import numpy as np
 
 import torch
 from torch import nn
