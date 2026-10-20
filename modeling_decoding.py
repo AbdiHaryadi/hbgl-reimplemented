@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from itertools import repeat
 import math
 import logging
 import numpy as np
@@ -41,6 +42,8 @@ class HBGLBertSelfAttentionForDecoding(nn.Module):
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+
+        self.last_attention_probs = None
 
     def transpose_for_scores(self, x):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -100,6 +103,7 @@ class HBGLBertSelfAttentionForDecoding(nn.Module):
 
         # Normalize the attention scores to probabilities.
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
+        self.last_attention_probs = attention_probs
 
         # There was a debug implementation here, but I skipped.
 
@@ -119,6 +123,9 @@ class HBGLBertSelfAttentionForDecoding(nn.Module):
 
         return context_layer
 
+    def get_last_attention_probs(self):
+        return self.last_attention_probs
+
 class HBGLBertAttentionForDecoding(nn.Module):
     def __init__(self, config):
         super(HBGLBertAttentionForDecoding, self).__init__()
@@ -132,6 +139,9 @@ class HBGLBertAttentionForDecoding(nn.Module):
             key_history=key_history, value_history=value_history, rel_pos=rel_pos)
         attention_output = self.output(self_output, input_tensor)
         return attention_output
+
+    def get_last_attention_probs(self):
+        return self.self.get_last_attention_probs()
 
 class HBGLBertLayerForDecoding(nn.Module):
     def __init__(self, config):
@@ -158,11 +168,15 @@ class HBGLBertLayerForDecoding(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
 
+    def get_last_attention_probs(self):
+        return self.attention.get_last_attention_probs()
+
 class HBGLBertEncoderForDecoding(nn.Module):
     def __init__(self, config):
         super(HBGLBertEncoderForDecoding, self).__init__()
         self.layer = nn.ModuleList([HBGLBertLayerForDecoding(config)
                                     for _ in range(config.num_hidden_layers)])
+        self.last_attention_probs_in_last_layer = None
 
     def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True, 
                 prev_embedding=None, prev_encoded_layers=None, 
@@ -181,6 +195,8 @@ class HBGLBertEncoderForDecoding(nn.Module):
                     all_encoder_layers.append(hidden_states)
                 if prev_encoded_layers is not None:
                     history_states = prev_encoded_layers[i]
+                if isinstance(layer_module, HBGLBertLayerForDecoding):
+                    self.last_attention_probs_in_last_layer = layer_module.get_last_attention_probs()
         else:
             for i, layer_module in enumerate(self.layer):
                 set_key = None
@@ -195,9 +211,14 @@ class HBGLBertEncoderForDecoding(nn.Module):
                     key_history=set_key, value_history=set_value, rel_pos=rel_pos)
                 if output_all_encoded_layers:
                     all_encoder_layers.append(hidden_states)
+                if isinstance(layer_module, HBGLBertLayerForDecoding):
+                    self.last_attention_probs_in_last_layer = layer_module.get_last_attention_probs()
         if not output_all_encoded_layers:
             all_encoder_layers.append(hidden_states)
         return all_encoder_layers
+
+    def get_last_attention_probs_in_last_layer(self):
+        return self.last_attention_probs_in_last_layer
 
 
 class HBGLBertEmbeddingsForDecoding(nn.Module):
@@ -382,6 +403,9 @@ class BertModelIncr(HBGLBertModelForDecoding):
             encoded_layers = encoded_layers[-1]
         return embedding_output, encoded_layers
 
+    def get_last_attention_probs_in_last_layer(self):
+        return self.encoder.get_last_attention_probs_in_last_layer()
+
 
 class BertForSeq2SeqDecoder(BertPreTrainedModel):
     _tied_weights_keys = {
@@ -413,183 +437,213 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             attention_mask: torch.Tensor,
             task_idx: torch.Tensor | None = None,
     ):
-        batch_size = input_ids.size(dim=0)
+        output_ids = self.get_output_ids(input_ids, token_type_ids, position_ids, attention_mask)
+        if len(output_ids) == 0:
+            return torch.cat([], dim=0)
+        
+        return torch.cat(
+            self.output_ids_postprocess_2(
+                self.output_ids_postprocess_1(output_ids),
+                device=output_ids[0][0].device
+            ),
+            dim=0
+        )
+
+    def get_output_ids(
+            self,
+            input_ids: torch.Tensor,
+            token_type_ids: torch.Tensor,
+            position_ids: torch.Tensor,
+            attention_mask: torch.Tensor,
+    ) -> list[list[torch.Tensor]]:
         input_length = input_ids.size(dim=1)
         output_length = token_type_ids.size(dim=1)
 
-        output_ids = []
-        prev_embedding = None
-        prev_encoded_layers = None
-        curr_ids = input_ids
-        mask_ids = input_ids.new(batch_size, 1).fill_(self.mask_word_id)
-        next_pos = input_length
+        if input_length == output_length:
+            return []
+
+        self._output_ids: list[list[torch.Tensor]] = []
+        attention_probs_list = []
+
+        # Case when curr_ids is NOT NONE (curr_ids = input_ids)
+        # AND next_pos == input_length
+
+        # curr_ids yang tidak None hanya dilakukan sekali.
         if self.pos_shift:
+            batch_size = input_ids.size(dim=0)
             sep_ids = input_ids.new(batch_size, 1).fill_(self.eos_id)
-
-        if self.bert.rel_pos_bias is not None:
-            rel_pos_mat = position_ids.unsqueeze(-2) - position_ids.unsqueeze(-1)
-            rel_pos = relative_position_bucket(
-                rel_pos_mat, num_buckets=self.config.rel_pos_bins, max_distance=self.config.max_rel_pos)
+            x_input_ids = torch.cat((input_ids, sep_ids), dim=1)
         else:
-            rel_pos = None
+            mask_ids = self.get_mask_ids(input_ids)
+            x_input_ids = torch.cat((input_ids, mask_ids), dim=1)
 
-        pred_embeds = None
+        start_pos = 0
+        next_pos = input_length
+
+        new_embedding, new_encoded_layers = self.bert(
+            input_ids=x_input_ids,
+            token_type_ids=token_type_ids[:, start_pos:next_pos + 1],
+            position_ids=position_ids[:, start_pos:next_pos + 1],
+            attention_mask=attention_mask[:, start_pos:next_pos + 1, :next_pos + 1],
+            output_all_encoded_layers=True,
+            rel_pos=self.get_curr_rel_pos(position_ids, start_pos, next_pos)
+        )
+        attention_probs_list.append(self.bert.get_last_attention_probs_in_last_layer())
+        assert isinstance(new_embedding, torch.Tensor)
+        pred_embeds, pred_ids = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
+        self._output_ids.append(pred_ids)
+
+        prev_embedding = self.concat_embedding_or_layer(None, new_embedding)
+        prev_encoded_layers = self.concat_layers(None, new_encoded_layers)
+        
+        next_pos += 1
         while next_pos < output_length:
-            if curr_ids is None and pred_embeds is not None:
-                # set curr_ids to None in two more loops
+            if self.pos_shift:
+                start_pos = next_pos
+            else:
                 curr_length = pred_embeds.size(dim=1)
-                if self.pos_shift:
-                    if next_pos == input_length:
-                        x_input_embeds = torch.cat((pred_embeds,
-                                                    self.bert.embeddings.word_embeddings(sep_ids)), dim=1)
-                        start_pos = 0
-                    else:
-                        x_input_embeds = pred_embeds
-                        start_pos = next_pos
-                else:
-                    start_pos = next_pos - curr_length
-                    x_input_embeds = torch.cat((pred_embeds,
-                                                self.bert.embeddings.word_embeddings(mask_ids)), dim=1)
-                x_input_ids = None
-            elif curr_ids is not None:
-                curr_length = list(curr_ids.size())[1]
-                if self.pos_shift:
-                    if next_pos == input_length:
-                        x_input_ids = torch.cat((curr_ids, sep_ids), dim=1)
-                        start_pos = 0
-                    else:
-                        x_input_ids = curr_ids
-                        start_pos = next_pos
-                else:
-                    start_pos = next_pos - curr_length
-                    x_input_ids = torch.cat((curr_ids, mask_ids), dim=1)
-                x_input_embeds = None
-            else:
-                raise ValueError("Cannot handle when curr_ids and pred_embeds are None")
-
-
-            curr_token_type_ids = token_type_ids[:, start_pos:next_pos + 1]
-            curr_attention_mask = attention_mask[:,
-                                  start_pos:next_pos + 1, :next_pos + 1]
-            curr_position_ids = position_ids[:, start_pos:next_pos + 1]
-
-            if rel_pos is not None:
-                cur_rel_pos = rel_pos[:, start_pos:next_pos + 1, :next_pos + 1]
-            else:
-                cur_rel_pos = None
-
-            if x_input_embeds is not None:
-                new_embedding, new_encoded_layers = \
-                    self.bert(None, curr_token_type_ids, curr_position_ids, curr_attention_mask,
-                            output_all_encoded_layers=True, prev_embedding=prev_embedding,
-                              prev_encoded_layers=prev_encoded_layers, rel_pos=cur_rel_pos,
-                              inputs_embeds=x_input_embeds, )
-            else:
-                new_embedding, new_encoded_layers = \
-                    self.bert(x_input_ids, curr_token_type_ids, curr_position_ids, curr_attention_mask,
-                            output_all_encoded_layers=True, prev_embedding=prev_embedding,
-                            prev_encoded_layers=prev_encoded_layers, rel_pos=cur_rel_pos)
-            assert isinstance(new_embedding, torch.Tensor)
-
-            last_hidden = new_encoded_layers[-1][:, -1:, :]
-            if self.soft_label_hier_real and self.hier_labels is not None:
-                curr_hier = len(output_ids)
-                hl = self.hier_labels[curr_hier]
-                prediction_scores = self.cls(last_hidden)
-
-                prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                            prediction_scores[:, :, hl]], dim=-1)
-
-                prediction_scores = torch.sigmoid(prediction_scores) > 0.5
-
-                _pred_ids: list[torch.Tensor] = []
-                for i in range(prediction_scores.shape[0]):
-                    device = prediction_scores.device
-                    pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
-                    sep_mask = pred_ids == 0
-                    pred_ids[sep_mask] = self.eos_id
-                    pred_ids[~sep_mask] = torch.arange(hl.shape[-1], device=device)[hl][pred_ids[~sep_mask] - 1]
-                    _pred_ids.append(pred_ids)
-                pred_ids = _pred_ids
-                output_ids.append(pred_ids)
-
-                pred_embeds =  prediction_scores.float() @ torch.cat(
-                    [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
-                    self.bert.embeddings.word_embeddings.weight.data[hl]], dim=0)
-                max_ids = None
-            else:
-                lsi = self.label_start_index
-                prediction_scores = self.cls(last_hidden)
-
-                prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                            prediction_scores[:, :, lsi:]], dim=-1)
-
-                prediction_scores = torch.sigmoid(prediction_scores) > 0.5
-
-                _pred_ids: list[torch.Tensor] = []
-                for i in range(prediction_scores.shape[0]):
-                    device = prediction_scores.device
-                    pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
-                    sep_mask = pred_ids == 0
-                    pred_ids[sep_mask] = self.eos_id
-                    pred_ids[~sep_mask] += lsi - 1
-                    _pred_ids.append(pred_ids)
-                pred_ids = _pred_ids
-                output_ids.append(pred_ids)
-
-                pred_embeds =  prediction_scores.float() @ torch.cat(
-                    [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
-                    self.bert.embeddings.word_embeddings.weight.data[lsi:]], dim=0)
-                max_ids = None
+                start_pos = next_pos - curr_length
 
             if self.pos_shift:
-                if prev_embedding is None:
-                    prev_embedding = new_embedding
-                else:
-                    prev_embedding = torch.cat(
-                        (prev_embedding, new_embedding), dim=1)
-                if prev_encoded_layers is None:
-                    prev_encoded_layers = [x for x in new_encoded_layers]
-                else:
-                    prev_encoded_layers = [torch.cat((x[0], x[1]), dim=1) for x in zip(
-                        prev_encoded_layers, new_encoded_layers)]
+                x_input_embeds = pred_embeds
             else:
-                if prev_embedding is None:
-                    prev_embedding = new_embedding[:, :-1, :]
-                else:
-                    prev_embedding = torch.cat(
-                        (prev_embedding, new_embedding[:, :-1, :]), dim=1)
-                if prev_encoded_layers is None:
-                    prev_encoded_layers = [x[:, :-1, :]
-                                           for x in new_encoded_layers]
-                else:
-                    prev_encoded_layers = [torch.cat((x[0], x[1][:, :-1, :]), dim=1)
-                                           for x in zip(prev_encoded_layers, new_encoded_layers)]
-            curr_ids = max_ids
+                mask_ids = self.get_mask_ids(input_ids)
+                x_input_embeds = torch.cat((pred_embeds,
+                                            self.bert.embeddings.word_embeddings(mask_ids)), dim=1)
+            
+            new_embedding, new_encoded_layers = self.bert(
+                input_ids=None,
+                token_type_ids=token_type_ids[:, start_pos:next_pos + 1],
+                position_ids=position_ids[:, start_pos:next_pos + 1],
+                attention_mask=attention_mask[:, start_pos:next_pos + 1, :next_pos + 1],
+                output_all_encoded_layers=True,
+                prev_embedding=prev_embedding,
+                prev_encoded_layers=prev_encoded_layers,
+                rel_pos=self.get_curr_rel_pos(position_ids, start_pos, next_pos),
+                inputs_embeds=x_input_embeds
+            )
+            assert isinstance(new_embedding, torch.Tensor)
+            attention_probs_list.append(self.bert.get_last_attention_probs_in_last_layer())
+            pred_embeds, pred_ids = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
+            self._output_ids.append(pred_ids)
+
+            prev_embedding = self.concat_embedding_or_layer(prev_embedding, new_embedding)
+            prev_encoded_layers = self.concat_layers(prev_encoded_layers, new_encoded_layers)
             next_pos += 1
 
-        device = output_ids[0][0].device
-        _output_ids: list = [[] for _ in output_ids[0]]
-        MAX_LABEL_OUTPUT_LENGTH = 10
-        for i, oi in enumerate(_output_ids):
-            
-            _output_ids[i] = torch.cat([j[i] for j in output_ids], dim=0)
-            index = 10000
-            for index, d in enumerate(_output_ids[i].tolist()):
-                if d == 102: break
-            _output_ids[i] = sorted(list(set(_output_ids[i].tolist()[:index])), reverse=True)
+        self.last_attention_probs_list = attention_probs_list
+        return self._output_ids
 
+    def concat_embedding_or_layer(self, prev_embedding: torch.Tensor | None, new_embedding: torch.Tensor):
+        if not self.pos_shift:
+            new_embedding = new_embedding[:, :-1, :]
+        
+        if prev_embedding is None:
+            return new_embedding
+
+        return torch.cat((prev_embedding, new_embedding), dim=1)
+
+    def concat_layers(self, prev_encoded_layers: list[torch.Tensor] | None, new_encoded_layers: list[torch.Tensor]):
+        return [
+            self.concat_embedding_or_layer(prev_layer, new_layer)
+            for prev_layer, new_layer in zip(
+                repeat(None) if prev_encoded_layers is None else prev_encoded_layers,
+                new_encoded_layers
+            )
+        ]
+
+    def get_new_pred_embeds_and_pred_ids(self, new_encoded_layers):
+        last_hidden: torch.Tensor = new_encoded_layers[-1][:, -1:, :]
+        prediction_scores = self.get_prediction_scores(last_hidden)
+        prediction_scores = torch.sigmoid(prediction_scores) > 0.5
+        pred_ids = self.get_pred_ids(prediction_scores)
+        pred_embeds = self.get_pred_embeds(prediction_scores)
+        return pred_embeds, pred_ids
+
+    def get_prediction_scores(self, last_hidden: torch.Tensor):
+        if self.soft_label_hier_real and self.hier_labels is not None:
+            hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
+            prediction_scores: torch.Tensor = self.cls(last_hidden)
+            prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
+                                            prediction_scores[:, :, hl]], dim=-1)
+        else:
+            lsi = self.label_start_index
+            prediction_scores: torch.Tensor = self.cls(last_hidden)
+            prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
+                                            prediction_scores[:, :, lsi:]], dim=-1)
+        return prediction_scores
+
+    def get_pred_ids(self, prediction_scores: torch.Tensor):
+        _pred_ids: list[torch.Tensor] = []
+        device = prediction_scores.device
+        for i in range(prediction_scores.shape[0]):
+            pred_ids = torch.arange(prediction_scores.shape[-1], device=device)[prediction_scores[i, -1]]
+            sep_mask = pred_ids == 0
+            pred_ids[sep_mask] = self.eos_id
+            if self.soft_label_hier_real and self.hier_labels is not None:
+                hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
+                pred_ids[~sep_mask] = torch.arange(hl.shape[-1], device=device)[hl][pred_ids[~sep_mask] - 1]
+            else:
+                lsi = self.label_start_index
+                pred_ids[~sep_mask] += lsi - 1
+            _pred_ids.append(pred_ids)
+        return _pred_ids
+
+    def get_pred_embeds(self, prediction_scores: torch.Tensor):
+        if self.soft_label_hier_real and self.hier_labels is not None:
+            hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
+            pred_embeds =  prediction_scores.float() @ torch.cat(
+                            [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
+                            self.bert.embeddings.word_embeddings.weight.data[hl]], dim=0)
+        else:
+            lsi = self.label_start_index
+            pred_embeds =  prediction_scores.float() @ torch.cat(
+                            [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
+                            self.bert.embeddings.word_embeddings.weight.data[lsi:]], dim=0)
+
+        return pred_embeds
+
+    def get_curr_hier_for_soft_label_hier_real(self):
+        return len(self._output_ids)
+
+    def get_curr_rel_pos(
+            self,
+            position_ids: torch.Tensor,
+            start_pos: int,
+            next_pos: int
+    ):
+        if self.bert.rel_pos_bias is None:
+            return None
+
+        rel_pos_mat = position_ids.unsqueeze(-2) - position_ids.unsqueeze(-1)
+        rel_pos = relative_position_bucket(rel_pos_mat, num_buckets=self.config.rel_pos_bins, max_distance=self.config.max_rel_pos)
+        cur_rel_pos = rel_pos[:, start_pos:next_pos + 1, :next_pos + 1]
+        return cur_rel_pos
+
+    def get_mask_ids(self, input_ids: torch.Tensor):
+        batch_size = input_ids.size(dim=0)
+        return input_ids.new(batch_size, 1).fill_(self.mask_word_id)
+
+    def output_ids_postprocess_1(self, output_ids: list[list[torch.Tensor]]):
+        _output_ids: list[list[int]] = [[] for _ in output_ids[0]]
+        for i, _ in enumerate(_output_ids):
+            temp = torch.cat([j[i] for j in output_ids], dim=0)
+            index = 10000
+            for index, d in enumerate(temp.tolist()):
+                if d == 102: break
+            temp2 = sorted(list(set(temp.tolist()[:index])), reverse=True)
+            _output_ids[i] = temp2
+        return _output_ids
+
+    def output_ids_postprocess_2(self, temp: list[list[int]], device: torch.device):
         PAD_TOKEN_ID = 0
-        for i, oi in enumerate(_output_ids):
+        MAX_LABEL_OUTPUT_LENGTH = 10
+        
+        _output_ids: list[torch.Tensor] = []
+        for oi in temp:
             padded = oi + [PAD_TOKEN_ID] * (MAX_LABEL_OUTPUT_LENGTH - len(oi))
             if len(oi) > MAX_LABEL_OUTPUT_LENGTH:
                 print(f"Warning: It's possible to get higher length like {len(oi)}. Increase max label output length in the future")
                 padded = padded[:MAX_LABEL_OUTPUT_LENGTH]
-            _output_ids[i] = torch.tensor(
-                padded,
-                dtype=torch.long,
-                device=device
-            ).unsqueeze(0)
-
-        output_ids = _output_ids
-        return torch.cat(output_ids, dim=0)
+            _output_ids.append(torch.tensor(padded, dtype=torch.long, device=device).unsqueeze(0))
+        return _output_ids
