@@ -236,7 +236,6 @@ class HBGLBertLayer(nn.Module):
         return outputs
 
 class HBGLBertEncoder(nn.Module):
-    # TODO: Combine with HBGLBertEncoderForDecoding
     def __init__(self, config):
         super(HBGLBertEncoder, self).__init__()
         self.output_attentions = config.output_attentions
