@@ -168,23 +168,12 @@ def batch_list_to_batch_tensors(batch: list[Seq2seqDatasetForBertElementType]):
     )
 
 def _fast_process_one(example, tokenizer):
-    if isinstance(example["src"], list):
-        source_tokens = example["src"]
-        target_tokens = example["tgt"]
-        if "tgt_kd" in example:
-            target_kd_tokens = example["tgt_kd"]
-    else:
-        source_tokens = tokenizer.tokenize(example["src"])
-        target_tokens = tokenizer.tokenize(example["tgt"])
-        if "tgt_kd" in example:
-            target_kd_tokens = tokenizer.tokenize(example["tgt_kd"])
-    out_dict = {
-            "source_ids": tokenizer.convert_tokens_to_ids(source_tokens),
-            "target_ids": tokenizer.convert_tokens_to_ids(target_tokens),
-        }
-    if "tgt_kd" in example:
-        out_dict["target_kd_ids"] = tokenizer.convert_tokens_to_ids(target_kd_tokens)
-    return out_dict
+    return {
+        "source_ids": tokenizer.convert_tokens_to_ids(tokenizer.tokenize(example["src"])),
+        "target_ids": [tokenizer.convert_tokens_to_ids([
+            id_to_label_token(label).lower() for label in label_list_per_level
+        ]) for label_list_per_level in example['tgt']],
+    }
 
 def report_length(length_counter, total_count):
     max_len = max(length_counter.keys())
