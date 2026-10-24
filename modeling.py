@@ -471,7 +471,7 @@ class LabelSmoothingLoss(_Loss):
         return F.kl_div(output, model_prob, reduction='none').view(batch_size, num_pos, -1).sum(2)
 
 
-def create_mask_and_position_ids(num_tokens, max_len, offset=None):
+def create_mask_and_position_ids(num_tokens: torch.Tensor, max_len: int, offset: torch.Tensor | None = None):
     base_position_matrix = torch.arange(
         0, max_len, dtype=num_tokens.dtype, device=num_tokens.device).view(1, -1)
     mask = (base_position_matrix < num_tokens.view(-1, 1)).type_as(num_tokens)
@@ -535,7 +535,12 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
     soft_label_hier_real = False
 
     @staticmethod
-    def create_attention_mask(source_mask, target_mask, source_position_ids, target_span_ids):
+    def create_attention_mask(
+            source_mask: torch.Tensor,
+            target_mask: torch.Tensor,
+            source_position_ids: torch.Tensor,
+            target_span_ids: torch.Tensor
+    ):
         weight = torch.cat((torch.zeros_like(source_position_ids), target_span_ids, -target_span_ids), dim=1)
         from_weight = weight.unsqueeze(-1)
         to_weight = weight.unsqueeze(1)
@@ -548,28 +553,21 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
         return (true_tokens_mask | pseudo_tokens_mask).type_as(source_mask)
 
     def forward(
-            self, source_ids, target_ids, label_ids, pseudo_ids, 
-            num_source_tokens, num_target_tokens, target_span_ids=None, target_no_offset=None):
+            self,
+            source_ids: torch.Tensor,
+            target_ids: torch.Tensor,
+            label_ids: torch.Tensor,
+            pseudo_ids: torch.Tensor, 
+            num_source_tokens: torch.Tensor,
+            num_target_tokens: torch.Tensor,
+            target_span_ids: torch.Tensor | None = None,
+            target_no_offset=None
+    ):
         source_len = source_ids.size(1)
         target_len = target_ids.size(1)
         pseudo_len = pseudo_ids.size(1)
         assert target_len == pseudo_len
         assert source_len > 0 and target_len > 0
-        split_lengths = (source_len, target_len, pseudo_len)
-
-
-        # input_ids = torch.cat((source_ids, target_ids, pseudo_ids), dim=1)
-        source_ids_embeds = self.bert.embeddings.word_embeddings(source_ids)
-
-        target_ids_embeds = target_ids @ self.bert.embeddings.word_embeddings.weight.data
-        pseudo_ids_embeds = self.bert.embeddings.word_embeddings(pseudo_ids)
-        input_embeds = torch.cat((source_ids_embeds, target_ids_embeds, pseudo_ids_embeds), dim=1)
-        input_ids = None
-        assert pseudo_ids.shape[1] ==  target_ids.shape[1]
-        token_type_ids = torch.cat(
-            (torch.ones_like(source_ids) * self.source_type_id,
-                torch.ones_like(pseudo_ids) * self.target_type_id,
-                torch.ones_like(pseudo_ids) * self.target_type_id), dim=1)
 
         source_mask, source_position_ids = \
             create_mask_and_position_ids(num_source_tokens, source_len)
@@ -577,24 +575,42 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             create_mask_and_position_ids(
                 num_target_tokens, target_len, offset=None if target_no_offset else num_source_tokens)
 
-        position_ids = torch.cat((source_position_ids, target_position_ids, target_position_ids), dim=1)
         if target_span_ids is None:
             target_span_ids = target_position_ids
-        attention_mask = self.create_attention_mask(source_mask, target_mask, source_position_ids, target_span_ids)
 
-        outputs = self.bert(
-            None, inputs_embeds=input_embeds, attention_mask=attention_mask, token_type_ids=token_type_ids,
-            position_ids=position_ids, split_lengths=split_lengths)
+        outputs: torch.Tensor = self.bert(
+            None,
+            inputs_embeds=self.create_input_embeds(source_ids, target_ids, pseudo_ids),
+            attention_mask=self.create_attention_mask(source_mask, target_mask, source_position_ids, target_span_ids),
+            token_type_ids=self.create_token_type_ids(source_ids, target_ids),
+            position_ids=torch.cat((source_position_ids, target_position_ids, target_position_ids), dim=1),
+            split_lengths=(source_len, target_len, pseudo_len))
 
         sequence_output = outputs[0]
         pseudo_sequence_output = sequence_output[:, source_len + target_len:, ]
 
-        def loss_mask_and_normalize(loss, mask):
-            mask = mask.type_as(loss)
-            loss = loss * mask
-            denominator = torch.sum(mask) + 1e-5
-            return (loss / denominator).sum()
+        label_ids, prediction_scores_masked = self.get_new_label_ids_and_prediction_scores_masked(
+            label_ids,
+            pseudo_sequence_output
+        )
+        pseudo_lm_loss = self.calculate_pseudo_lm_loss(label_ids, pseudo_ids, target_mask, prediction_scores_masked)
 
+        return pseudo_lm_loss
+
+    def create_token_type_ids(self, source_ids, target_ids: torch.Tensor):
+        return torch.cat(
+                (torch.ones_like(source_ids) * self.source_type_id,
+                    torch.ones_like(target_ids) * self.target_type_id,
+                    torch.ones_like(target_ids) * self.target_type_id), dim=1)
+
+    def create_input_embeds(self, source_ids: torch.Tensor, target_ids: torch.Tensor, pseudo_ids: torch.Tensor):
+        source_ids_embeds = self.bert.embeddings.word_embeddings(source_ids)
+        target_ids_embeds = target_ids @ self.bert.embeddings.word_embeddings.weight.data
+        pseudo_ids_embeds = self.bert.embeddings.word_embeddings(pseudo_ids)
+        input_embeds = torch.cat((source_ids_embeds, target_ids_embeds, pseudo_ids_embeds), dim=1)
+        return input_embeds
+
+    def get_new_label_ids_and_prediction_scores_masked(self, label_ids: torch.Tensor, pseudo_sequence_output: torch.Tensor):
         if self.label_start_index > 0:
             lsi = self.label_start_index
             new_label_ids = label_ids - lsi
@@ -612,15 +628,23 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             label_ids = new_label_ids
             # print(prediction_scores_masked, label_ids)
         else:
-            prediction_scores_masked = self.cls(pseudo_sequence_output)
+            prediction_scores_masked: torch.Tensor = self.cls(pseudo_sequence_output)
+        return label_ids,prediction_scores_masked
 
+    def calculate_pseudo_lm_loss(
+            self,
+            label_ids: torch.Tensor,
+            pseudo_ids: torch.Tensor,
+            target_mask: torch.Tensor,
+            prediction_scores_masked: torch.Tensor
+    ):
         if isinstance(self.sep_token_id, int):
             if (
                 self.soft_label_hier_real
                 and isinstance(self.hier_labels, torch.Tensor)
             ):
                 loss_fct = BCEWithLogitsLoss()
-                pseudo_lm_loss = 0
+                pseudo_lm_loss = torch.tensor(0.0).to(pseudo_ids.device)
                 for i, hl in enumerate(self.hier_labels):
                     mask_token_mask = pseudo_ids[:, i] == self.mask_token_id
                     if mask_token_mask.sum().item() == 0:
@@ -660,16 +684,21 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
 
                 # masked_lm_loss = loss_fct(prediction_scores_masked[mask_token_mask], label_ids[mask_token_mask])
         elif self.crit_mask_lm_smoothed:
-            masked_lm_loss = self.crit_mask_lm_smoothed(
+            masked_lm_loss: torch.Tensor = self.crit_mask_lm_smoothed(
                 F.log_softmax(prediction_scores_masked.float(), dim=-1), label_ids)
             pseudo_lm_loss = loss_mask_and_normalize(
                 masked_lm_loss.float(), target_mask)
         elif self.crit_mask_lm:
-            masked_lm_loss = self.crit_mask_lm(
+            masked_lm_loss: torch.Tensor = self.crit_mask_lm(
                 prediction_scores_masked.transpose(1, 2).float(), label_ids)
             pseudo_lm_loss = loss_mask_and_normalize(
                 masked_lm_loss.float(), target_mask)
         else:
             raise NotImplementedError("No loss implemented")
-
         return pseudo_lm_loss
+
+def loss_mask_and_normalize(loss: torch.Tensor, target_mask: torch.Tensor):
+    target_mask = target_mask.type_as(loss)
+    loss = loss * target_mask
+    denominator = torch.sum(target_mask) + 1e-5
+    return (loss / denominator).sum()
