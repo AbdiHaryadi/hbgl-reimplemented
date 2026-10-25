@@ -371,10 +371,6 @@ class HBGLTrainer:
                 "cached_features_for_valid.pt"
             ),
             add_vocab_file=self.args.add_vocab_file,
-            soft_label_hier_real_with_train_file=(
-                self.args.train_file if self.args.soft_label_hier_real
-                else None
-            ),
         ))
 
         if out:

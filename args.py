@@ -44,7 +44,6 @@ class HBGLTrainingArguments:
     target_mask_prob: float = 0.5
     add_vocab_file: str | None = None
     wandb: bool = False
-    soft_label_hier_real: bool = False
     label_cpt: str | None = None
     label_cpt_lr: float = 0.001
     label_cpt_steps: int = 500
@@ -90,6 +89,7 @@ def parse_to_training_arguments(args=None):
     - --mask_way (always v2 [pseudo-masking])
     - --num_max_mask_token (not used)
     - --do_lower_case
+    - --soft_label_hier_real (always false for WOS)
     """
 
     parser = argparse.ArgumentParser()
@@ -173,8 +173,6 @@ def parse_to_training_arguments(args=None):
     parser.add_argument("--add_vocab_file", type=str, default=None)
     parser.add_argument('--wandb', action='store_true')
 
-    parser.add_argument('--soft_label_hier_real', action='store_true')
-
     parser.add_argument('--label_cpt', type=str, default=None)
     parser.add_argument('--label_cpt_lr', type=float, default=1e-3)
     parser.add_argument('--label_cpt_steps', type=int, default=500)
@@ -211,10 +209,8 @@ class HBGLTestingArguments:
     batch_size: int = 4
 
     max_tgt_length: int = 128
-    pos_shift: bool = False
     cache_dir: str | None = None
     cached_features_file: str | None = None
-    soft_label_hier_real_with_train_file: str | None = None
 
 def parse_to_testing_arguments(args=None):
     # Removed:
@@ -233,6 +229,8 @@ def parse_to_testing_arguments(args=None):
     # - s2s_share_segment
     # - softmax_label_only
     # - soft_label
+    # - soft_label_hier_real_with_train_file (always false)
+    # - pos_shift (always false [in WOS])
     parser = argparse.ArgumentParser()
     
     # Required parameters
@@ -262,12 +260,9 @@ def parse_to_testing_arguments(args=None):
                         help="Batch size for decoding.")
     parser.add_argument('--max_tgt_length', type=int, default=128,
                         help="maximum length of target sequence")
-    parser.add_argument('--pos_shift', action='store_true',
-                        help="Using position shift for fine-tuning.")
     parser.add_argument("--cache_dir", default=None, type=str,
                         help="Where do you want to store the pre-trained models downloaded from s3")
     parser.add_argument("--cached_features_file", type=str, default=None)
-    parser.add_argument('--soft_label_hier_real_with_train_file', default=None, type=str)
 
     return HBGLTestingArguments(**{
         k: v for k, v in vars(parser.parse_args(args=args)).items()

@@ -532,7 +532,6 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
 class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
     label_start_index = -1
     MODEL_NAME = "BertForSequenceToSequenceWithPseudoMask"
-    soft_label_hier_real = False
 
     @staticmethod
     def create_attention_mask(
@@ -639,50 +638,20 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             prediction_scores_masked: torch.Tensor
     ):
         if isinstance(self.sep_token_id, int):
-            if (
-                self.soft_label_hier_real
-                and isinstance(self.hier_labels, torch.Tensor)
-            ):
-                loss_fct = BCEWithLogitsLoss()
-                pseudo_lm_loss = torch.tensor(0.0).to(pseudo_ids.device)
-                for i, hl in enumerate(self.hier_labels):
-                    mask_token_mask = pseudo_ids[:, i] == self.mask_token_id
-                    if mask_token_mask.sum().item() == 0:
-                        continue
-                    hl = hl.to(pseudo_ids.device)
-                    prediction_scores_masked_i = prediction_scores_masked[:, i][mask_token_mask]
-                    label_ids_i = label_ids[:, i][mask_token_mask]
-                    prediction_scores_masked_i = torch.cat([prediction_scores_masked_i[:, self.sep_token_id].unsqueeze(-1),
-                                                            prediction_scores_masked_i[:, hl]], dim=-1)
-                    label_ids_i = torch.cat([label_ids_i[:, self.sep_token_id].unsqueeze(-1),
-                                             label_ids_i[:, hl]], dim=-1)
-                    pseudo_lm_loss += loss_fct(prediction_scores_masked_i, label_ids_i)
+            loss_fct = BCEWithLogitsLoss()
+            mask_token_mask = pseudo_ids == self.mask_token_id
+            prediction_scores_masked = prediction_scores_masked[mask_token_mask]
+            label_ids = label_ids[mask_token_mask]
 
-                # sep token
-                sep_mask_token_mask = pseudo_ids[:, -1] == self.mask_token_id
-                if sep_mask_token_mask.sum().item() != 0:
-                    prediction_scores_masked_sep = prediction_scores_masked[:, -1][sep_mask_token_mask]
-                    label_ids_sep = label_ids[:, -1][sep_mask_token_mask]
-                    prediction_scores_masked_sep = torch.cat([prediction_scores_masked_sep[:, self.sep_token_id].unsqueeze(-1),
-                                                    prediction_scores_masked_sep[:, self.text_vocab_size:]], dim=-1)
-                    label_ids_sep = torch.cat([label_ids_sep[:, self.sep_token_id].unsqueeze(-1),
-                                               label_ids_sep[:, self.text_vocab_size:]], dim=-1)
-                    pseudo_lm_loss += loss_fct(prediction_scores_masked, label_ids)
-            else:
-                loss_fct = BCEWithLogitsLoss()
-                mask_token_mask = pseudo_ids == self.mask_token_id
-                prediction_scores_masked = prediction_scores_masked[mask_token_mask]
-                label_ids = label_ids[mask_token_mask]
+            # label_ids[label_ids != self.sep_token_id] += 1
 
-                # label_ids[label_ids != self.sep_token_id] += 1
+            prediction_scores_masked = torch.cat([prediction_scores_masked[:, self.sep_token_id].unsqueeze(-1),
+                                                prediction_scores_masked[:, self.text_vocab_size:]], dim=-1)
+            label_ids = torch.cat([label_ids[:, self.sep_token_id].unsqueeze(-1),
+                                label_ids[:, self.text_vocab_size:]], dim=-1)
+            pseudo_lm_loss = loss_fct(prediction_scores_masked, label_ids)
 
-                prediction_scores_masked = torch.cat([prediction_scores_masked[:, self.sep_token_id].unsqueeze(-1),
-                                                    prediction_scores_masked[:, self.text_vocab_size:]], dim=-1)
-                label_ids = torch.cat([label_ids[:, self.sep_token_id].unsqueeze(-1),
-                                    label_ids[:, self.text_vocab_size:]], dim=-1)
-                pseudo_lm_loss = loss_fct(prediction_scores_masked, label_ids)
-
-                # masked_lm_loss = loss_fct(prediction_scores_masked[mask_token_mask], label_ids[mask_token_mask])
+            # masked_lm_loss = loss_fct(prediction_scores_masked[mask_token_mask], label_ids[mask_token_mask])
         elif self.crit_mask_lm_smoothed:
             masked_lm_loss: torch.Tensor = self.crit_mask_lm_smoothed(
                 F.log_softmax(prediction_scores_masked.float(), dim=-1), label_ids)

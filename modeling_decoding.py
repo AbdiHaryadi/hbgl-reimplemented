@@ -412,19 +412,17 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         "cls.predictions.decoder.bias": "cls.predictions.bias",
     }
     
-    def __init__(self, config, mask_word_id=0, eos_id=0, pos_shift=False):
+    def __init__(self, config, mask_word_id=0, eos_id=0):
         super(BertForSeq2SeqDecoder, self).__init__(config)
         self.bert = BertModelIncr(config)
         self.cls = BertOnlyMLMHead(config)
 
         self.mask_word_id = mask_word_id
         self.eos_id = eos_id
-        self.pos_shift = pos_shift
 
         self.label_start_index = -1
         self.ab_bound_token_id = -1
         self.hier_labels = None
-        self.soft_label_hier_real = False
 
         self.last_attention_probs_list = None
         self.last_score_list: list[torch.Tensor] | None = None
@@ -472,13 +470,8 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         # AND next_pos == input_length
 
         # curr_ids yang tidak None hanya dilakukan sekali.
-        if self.pos_shift:
-            batch_size = input_ids.size(dim=0)
-            sep_ids = input_ids.new(batch_size, 1).fill_(self.eos_id)
-            x_input_ids = torch.cat((input_ids, sep_ids), dim=1)
-        else:
-            mask_ids = self.get_mask_ids(input_ids)
-            x_input_ids = torch.cat((input_ids, mask_ids), dim=1)
+        mask_ids = self.get_mask_ids(input_ids)
+        x_input_ids = torch.cat((input_ids, mask_ids), dim=1)
 
         start_pos = 0
         next_pos = input_length
@@ -502,18 +495,12 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         
         next_pos += 1
         while next_pos < output_length:
-            if self.pos_shift:
-                start_pos = next_pos
-            else:
-                curr_length = pred_embeds.size(dim=1)
-                start_pos = next_pos - curr_length
+            curr_length = pred_embeds.size(dim=1)
+            start_pos = next_pos - curr_length
 
-            if self.pos_shift:
-                x_input_embeds = pred_embeds
-            else:
-                mask_ids = self.get_mask_ids(input_ids)
-                x_input_embeds = torch.cat((pred_embeds,
-                                            self.bert.embeddings.word_embeddings(mask_ids)), dim=1)
+            mask_ids = self.get_mask_ids(input_ids)
+            x_input_embeds = torch.cat((pred_embeds,
+                                        self.bert.embeddings.word_embeddings(mask_ids)), dim=1)
             
             new_embedding, new_encoded_layers = self.bert(
                 input_ids=None,
@@ -541,8 +528,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         return self._output_ids
 
     def concat_embedding_or_layer(self, prev_embedding: torch.Tensor | None, new_embedding: torch.Tensor):
-        if not self.pos_shift:
-            new_embedding = new_embedding[:, :-1, :]
+        new_embedding = new_embedding[:, :-1, :]
         
         if prev_embedding is None:
             return new_embedding
@@ -567,16 +553,9 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         return pred_embeds, pred_ids, prediction_scores
 
     def get_prediction_scores(self, last_hidden: torch.Tensor):
-        if self.soft_label_hier_real and self.hier_labels is not None:
-            hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
-            prediction_scores: torch.Tensor = self.cls(last_hidden)
-            prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                            prediction_scores[:, :, hl]], dim=-1)
-        else:
-            lsi = self.label_start_index
-            prediction_scores: torch.Tensor = self.cls(last_hidden)
-            prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                            prediction_scores[:, :, lsi:]], dim=-1)
+        prediction_scores: torch.Tensor = self.cls(last_hidden)
+        prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
+                                        prediction_scores[:, :, self.label_start_index:]], dim=-1)
         return prediction_scores
 
     def get_pred_ids(self, predictions: torch.Tensor):
@@ -587,32 +566,17 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             pred_ids = torch.arange(predictions.shape[-1], device=device)[predictions[i, -1]]
             sep_mask = pred_ids == 0
             pred_ids[sep_mask] = self.eos_id
-            if self.soft_label_hier_real and self.hier_labels is not None:
-                hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
-                pred_ids[~sep_mask] = torch.arange(hl.shape[-1], device=device)[hl][pred_ids[~sep_mask] - 1]
-            else:
-                lsi = self.label_start_index
-                pred_ids[~sep_mask] += lsi - 1
+            pred_ids[~sep_mask] += self.label_start_index - 1
             _pred_ids.append(pred_ids)
         return _pred_ids
 
     def get_pred_embeds(self, predictions: torch.Tensor):
         # Predictions are binary.
-        if self.soft_label_hier_real and self.hier_labels is not None:
-            hl = self.hier_labels[self.get_curr_hier_for_soft_label_hier_real()]
-            pred_embeds =  predictions.float() @ torch.cat(
-                            [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
-                            self.bert.embeddings.word_embeddings.weight.data[hl]], dim=0)
-        else:
-            lsi = self.label_start_index
-            pred_embeds =  predictions.float() @ torch.cat(
-                            [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
-                            self.bert.embeddings.word_embeddings.weight.data[lsi:]], dim=0)
+        pred_embeds =  predictions.float() @ torch.cat(
+                        [self.bert.embeddings.word_embeddings.weight.data[self.eos_id].unsqueeze(0),
+                        self.bert.embeddings.word_embeddings.weight.data[self.label_start_index:]], dim=0)
 
         return pred_embeds
-
-    def get_curr_hier_for_soft_label_hier_real(self):
-        return len(self._output_ids)
 
     def get_curr_rel_pos(
             self,

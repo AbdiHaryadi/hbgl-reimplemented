@@ -14,6 +14,24 @@ def get_random_word(vocab_words):
 Preprocess4Seq2seqDecoderOutputType = tuple[list[int], list[int], list[int], torch.Tensor, None, int]
 
 def batch_list_to_batch_tensors_for_testing(batch: list[Preprocess4Seq2seqDecoderOutputType]):
+    """
+    Output:
+    - input_ids:
+        torch.Tensor, size <batch_size, text_sequence_length>
+        Consists of all text token IDs.
+    - token_type_ids:
+        torch.Tensor, size <batch_size, text_sequence_length + label_sequence_length>
+        Consist of token type IDs for text (0) and label (1).
+    - position_ids:
+        torch.Tensor, size <batch_size, text_sequence_length + label_sequence_length>
+        Consist of position IDs for text and label.
+        This is just a simple arange stuff (0, 1, 2, and so on), no separation between text and label
+    - input_mask:
+        torch.Tensor, size <batch_size, text_sequence_length + label_sequence_length, text_sequence_length + label_sequence_length>
+        Main attention mask
+    - <None>
+    - task_idx: same as position_ids, potentially unused
+    """
     return (
         torch.tensor([x[0] for x in batch], dtype=torch.long),
         torch.tensor([x[1] for x in batch], dtype=torch.long),
@@ -56,8 +74,6 @@ class Preprocess4Seq2seqDecoder(Pipeline):
             indexer: Callable[[list[str]], list[int]],
             max_len: int = 512,
             max_tgt_length: int = 128,
-            mode: str = "s2s",
-            pos_shift: bool = False,
             source_type_id: int = 0,
             target_type_id: int = 1, 
             cls_token: str = '[CLS]',
@@ -71,12 +87,9 @@ class Preprocess4Seq2seqDecoder(Pipeline):
         self.max_len = max_len
         self._tril_matrix = torch.tril(torch.ones((max_len, max_len), dtype=torch.long))
         self.task_idx = 3   # relax projection layer for different tasks
-        assert mode in ("s2s", "l2r")
-        self.mode = mode
         self.max_tgt_length = max_tgt_length
-        self.pos_shift = pos_shift
 
-        self.delta = 1 if pos_shift else 2
+        self.delta = 2
 
         self.cls_token = cls_token
         self.sep_token = sep_token
@@ -91,8 +104,7 @@ class Preprocess4Seq2seqDecoder(Pipeline):
         tokens_a, max_a_len = instance
 
         padded_tokens_a = [self.cls_token] + tokens_a
-        if not self.pos_shift:
-            padded_tokens_a = padded_tokens_a + [self.sep_token]
+        padded_tokens_a = padded_tokens_a + [self.sep_token]
         assert len(padded_tokens_a) <= max_a_len + self.delta
         if max_a_len + self.delta > len(padded_tokens_a):
             padded_tokens_a += [self.pad_token] * \
@@ -127,13 +139,7 @@ class Preprocess4Seq2seqDecoder(Pipeline):
         # Zero Padding
         input_mask = torch.zeros(
             max_len_in_batch, max_len_in_batch, dtype=torch.long)
-        if self.mode == "s2s":
-            input_mask[:, :len(tokens_a) + self.delta].fill_(1)
-        else:
-            st, end = 0, len(tokens_a) + self.delta
-            input_mask[st:end, st:end].copy_(
-                self._tril_matrix[:end, :end])
-            input_mask[end:, :len(tokens_a) + self.delta].fill_(1)
+        input_mask[:, :len(tokens_a) + self.delta].fill_(1)
         second_st, second_end = len(padded_tokens_a), max_len_in_batch
 
         input_mask[second_st:second_end, second_st:second_end].copy_(

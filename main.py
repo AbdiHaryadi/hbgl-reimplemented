@@ -88,9 +88,6 @@ def test(
             batch_size=128,
             cached_features_file=os.path.join(args.output_dir, "cached_features_for_test.pt"),
             add_vocab_file=args.add_vocab_file,
-            soft_label_hier_real_with_train_file=(
-                args.train_file if args.soft_label_hier_real else None
-            )
         ))
         prefix = 'test' + 'micro' if i == 0 else 'macro'
         if args.wandb and out is not None:

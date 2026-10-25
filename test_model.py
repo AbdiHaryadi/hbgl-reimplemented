@@ -18,9 +18,10 @@ from transformers import BertConfig, BertTokenizer
 
 from args import HBGLTestingArguments, parse_to_testing_arguments
 from eval import evaluate
+from hierarchy import LabelMapper
 from modeling_decoding import BertForSeq2SeqDecoder
 import seq2seq_loader
-from utils import id_to_label_token, load_and_cache_examples, load_and_cache_examples_fast
+from utils import load_and_cache_examples, load_and_cache_examples_fast
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -54,11 +55,8 @@ def test(args: HBGLTestingArguments):
     assert isinstance(tokenizer.sep_token, str)
     assert isinstance(tokenizer.pad_token, str)
 
-    if args.add_vocab_file:
-        with open(args.add_vocab_file, 'rb') as f:
-            label_to_id_map: dict[str, int] = pickle.load(f)
-        labels_key = list(label_to_id_map.keys())
-        tokenizer.add_tokens([id_to_label_token(label_to_id_map[label]) for label in labels_key])
+    label_mapper = LabelMapper.load(args.add_vocab_file)
+    tokenizer.add_tokens([token.lower() for token in label_mapper.get_all_tokens()])
 
     tokenizer.model_max_length = args.max_seq_length
     mask_word_id = tokenizer.mask_token_id
@@ -83,7 +81,7 @@ def test(args: HBGLTestingArguments):
         bi_uni_pipeline = [
             seq2seq_loader.Preprocess4Seq2seqDecoder(
                 tokenizer_vocab_words(tokenizer), indexer, args.max_seq_length,
-                max_tgt_length=args.max_tgt_length, pos_shift=args.pos_shift,
+                max_tgt_length=args.max_tgt_length,
                 source_type_id=config.source_type_id, target_type_id=config.target_type_id,
                 cls_token=tokenizer.cls_token, sep_token=tokenizer.sep_token, pad_token=tokenizer.pad_token
             )
@@ -94,13 +92,9 @@ def test(args: HBGLTestingArguments):
             model_recover_path, config=config,
             mask_word_id=mask_word_id,
             eos_id=eos_word_id,
-            pos_shift=args.pos_shift,
         )
 
-        model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(labels_key)
-
-        if args.soft_label_hier_real_with_train_file:
-            prepare_hier_labels(args, tokenizer, model)  # Is this even used?
+        model.label_start_index = model.bert.embeddings.word_embeddings.num_embeddings - len(label_mapper)
 
         model.to(device)  # type: ignore
         if torch.cuda.device_count() > 1:
@@ -157,10 +151,7 @@ def get_outputs(
 ):
     torch.cuda.empty_cache()
     model.eval()
-    next_i = 0
     max_src_length = args.max_seq_length - 2 - args.max_tgt_length
-    if args.pos_shift:
-        max_src_length += 1
 
     num_lines = sum(1 for _ in open(args.input_file))
     if num_lines < 10000:
@@ -192,6 +183,7 @@ def get_outputs(
     with tqdm(total=total_batch) as pbar:
         batch_count = 0
         first_batch = True
+        next_i = 0
         while next_i < len(input_lines_with_indices):
             _chunk = input_lines_with_indices[next_i:next_i + args.batch_size]
             buf_id = [x[0] for x in _chunk]
@@ -204,7 +196,7 @@ def get_outputs(
                 for proc in bi_uni_pipeline:
                     instances.append(proc(instance))
             with torch.no_grad():
-                input_ids, token_type_ids, position_ids, input_mask, _, task_idx = seq2seq_loader.batch_list_to_batch_tensors_for_testing(instances)  # Check batch result
+                input_ids, token_type_ids, position_ids, input_mask, _, task_idx = seq2seq_loader.batch_list_to_batch_tensors_for_testing(instances)
                 traces = model(
                     input_ids=input_ids.to(device),
                     token_type_ids=token_type_ids.to(device),
@@ -238,29 +230,6 @@ def tokenizer_vocab_words(tokenizer: BertTokenizer):
     for token, id in tokenizer.vocab.items():
         vocab_words[id] = token
     return vocab_words
-
-def prepare_hier_labels(args, tokenizer, model):
-    hier_labels = None
-    for line in open(args.soft_label_hier_real_with_train_file):
-        if hier_labels:
-            for i, l in enumerate(json.loads(line)['tgt']):
-                hier_labels[i] |=  set(l)
-        else:
-            hier_labels = [set(i) for i in json.loads(line)['tgt']]
-
-    if hier_labels is None:
-        raise ValueError("No hier_labels")
-
-    hier_labels = [tokenizer.convert_tokens_to_ids(list([j.lower() for j in i])) for i in hier_labels]
-
-    def to_multi_hot(label):
-        _label = torch.zeros(model.config.vocab_size)
-        for i in label:
-            _label[i] = 1
-        return _label.bool()
-
-    model.hier_labels = [to_multi_hot(i) for i in hier_labels]
-    model.soft_label_hier_real = True
 
 if __name__ == "__main__":
     print(test(parse_to_testing_arguments()))
