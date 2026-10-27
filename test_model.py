@@ -221,7 +221,7 @@ def buf_to_traces(
         bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
         model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
         buf: list[list[str]],
-):
+) -> torch.Tensor:
     max_a_len = max([len(x) for x in buf])
     instances: list[seq2seq_loader.Preprocess4Seq2seqDecoderOutputType] = []
     for instance in [(x, max_a_len) for x in buf]:
