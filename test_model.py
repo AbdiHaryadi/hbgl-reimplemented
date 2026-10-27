@@ -58,11 +58,52 @@ def test(args: HBGLTestingArguments):
         logger.info("Not found the model checkpoint file!")
 
 def test_inner(args: HBGLTestingArguments, model_recover_path: str):
+    device = get_device()
+    tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, model_recover_path)
+    output_lines = get_outputs(args, device, tokenizer, bi_uni_pipeline, model)
+    if args.output_file:
+        fn_out = args.output_file
+    else:
+        fn_out = model_recover_path+'.'+args.split
+    with open(fn_out, "w", encoding="utf-8") as fout:
+        for l in output_lines:
+            fout.write(l)
+            fout.write("\n")
+
+    label_mapper = LabelMapper.load(args.add_vocab_file)
+    def token_to_id(token):
+        token = token.lower()
+        try:
+            token = int(token.replace('[a_', '').replace(']', ''))
+            token = 0 if token >= len(label_mapper) else token
+            return token
+        except:
+            return 0
+
+    predict_labels = [
+        (label_str.split(' ') if label_str else []) for label_str in
+        [i.replace("\n", '') for i in output_lines]
+    ]
+    predict_labels = [list(set([token_to_id(j) for j  in i])) for i in predict_labels]
+    with open(args.input_file) as f:
+        ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
+
+    id2label = {label_mapper.label_to_id(label): label for label in label_mapper.get_all_labels()}
+    out = evaluate(
+        epoch_predicts=predict_labels,
+        epoch_labels=ground_labels,
+        id2label=id2label,
+    )
+    return out
+
+def get_device():
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def prepare_for_get_outputs(args: HBGLTestingArguments, model_recover_path: str):
     if args.max_tgt_length >= args.max_seq_length - 2:
         raise ValueError("Maximum tgt length exceeds max seq length - 2.")
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     
     tokenizer: BertTokenizer = BertTokenizer.from_pretrained(
         args.tokenizer_name, do_lower_case=True,
@@ -109,42 +150,7 @@ def test_inner(args: HBGLTestingArguments, model_recover_path: str):
     model.to(device)  # type: ignore
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
-
-    output_lines = get_outputs(args, device, tokenizer, bi_uni_pipeline, model)
-    if args.output_file:
-        fn_out = args.output_file
-    else:
-        fn_out = model_recover_path+'.'+args.split
-    with open(fn_out, "w", encoding="utf-8") as fout:
-        for l in output_lines:
-            fout.write(l)
-            fout.write("\n")
-        
-    def token_to_id(token):
-        token = token.lower()
-        try:
-            token = int(token.replace('[a_', '').replace(']', ''))
-            token = 0 if token >= len(label_mapper) else token
-            return token
-        except:
-            return 0
-
-    predict_labels = [
-        (label_str.split(' ') if label_str else []) for label_str in
-        [i.replace("\n", '') for i in output_lines]
-    ]
-    predict_labels = [list(set([token_to_id(j) for j  in i])) for i in predict_labels]
-    with open(args.input_file) as f:
-        ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
-
-    label_mapper = LabelMapper.load(args.add_vocab_file)
-    id2label = {label_mapper.label_to_id(label): label for label in label_mapper.get_all_labels()}
-    out = evaluate(
-        epoch_predicts=predict_labels,
-        epoch_labels=ground_labels,
-        id2label=id2label,
-    )
-    return out
+    return tokenizer,bi_uni_pipeline,model
 
 def get_outputs(
         args: HBGLTestingArguments,
