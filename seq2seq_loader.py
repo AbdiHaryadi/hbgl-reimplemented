@@ -6,11 +6,6 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-
-def get_random_word(vocab_words):
-    i = randint(0, len(vocab_words)-1)
-    return vocab_words[i]
-
 Preprocess4Seq2seqDecoderOutputType = tuple[list[int], list[int], list[int], torch.Tensor, None, int]
 
 def batch_list_to_batch_tensors_for_testing(batch: list[Preprocess4Seq2seqDecoderOutputType]):
