@@ -177,6 +177,37 @@ def get_outputs(
         first_batch = False
     return output_lines
 
+def get_scores(
+        args: HBGLTestingArguments,
+        device: torch.device,
+        tokenizer: BertTokenizer,
+        bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
+        model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
+):
+    torch.cuda.empty_cache()
+    model.eval()
+    input_lines_with_indices = get_input_lines_with_indices(args, tokenizer)
+    result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
+
+    for _chunk in iter_chunk(input_lines_with_indices, batch_size=args.batch_size):
+        buf_id = [x[0] for x in _chunk]
+        buf = [x[1] for x in _chunk]
+        with torch.no_grad():
+            # I don't care about the output.
+            buf_to_traces(device, bi_uni_pipeline, model, buf)
+
+        current_batch_scores = to_base_model(model).get_last_score_list()
+        if current_batch_scores is not None:
+            for i in range(len(buf)):
+                result[buf_id[i]] = [scores_per_level[i] for scores_per_level in current_batch_scores]
+
+    return result
+
+def to_base_model(model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder]):
+    if isinstance(model, torch.nn.DataParallel):
+        return model.module
+    return model
+
 def get_input_lines_with_indices(args: HBGLTestingArguments, tokenizer: BertTokenizer):
     max_src_length = args.max_seq_length - 2 - args.max_tgt_length
 
