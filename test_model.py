@@ -164,7 +164,8 @@ def get_outputs(
         buf_id = [x[0] for x in _chunk]
         buf = [x[1] for x in _chunk]
         batch_count += 1
-        traces = buf_to_traces(device, bi_uni_pipeline, model, buf)
+        with torch.no_grad():
+            traces = buf_to_traces(device, bi_uni_pipeline, model, buf)
 
         output_ids = traces.tolist()
         for i in range(len(buf)):
@@ -226,16 +227,15 @@ def buf_to_traces(
     for instance in [(x, max_a_len) for x in buf]:
         for proc in bi_uni_pipeline:
             instances.append(proc(instance))
-    with torch.no_grad():
-        input_ids, token_type_ids, position_ids, input_mask, _, task_idx = seq2seq_loader.batch_list_to_batch_tensors_for_testing(instances)
-        traces = model(
-                    input_ids=input_ids.to(device),
-                    token_type_ids=token_type_ids.to(device),
-                    position_ids=position_ids.to(device),
-                    attention_mask=input_mask.to(device),
-                    task_idx=task_idx.to(device)
-                )
-    return traces
+
+    input_ids, token_type_ids, position_ids, input_mask, _, task_idx = seq2seq_loader.batch_list_to_batch_tensors_for_testing(instances)
+    return model(
+        input_ids=input_ids.to(device),
+        token_type_ids=token_type_ids.to(device),
+        position_ids=position_ids.to(device),
+        attention_mask=input_mask.to(device),
+        task_idx=task_idx.to(device)
+    )
 
 def convert_w_ids_to_output_sequence(tokenizer: BertTokenizer, w_ids: list[int]):
     output_buf = tokenizer.convert_ids_to_tokens(w_ids)
