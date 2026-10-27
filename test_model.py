@@ -58,9 +58,8 @@ def test(args: HBGLTestingArguments):
         logger.info("Not found the model checkpoint file!")
 
 def test_inner(args: HBGLTestingArguments, model_recover_path: str):
-    device = get_device()
     tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, model_recover_path)
-    output_lines = get_outputs(args, device, tokenizer, bi_uni_pipeline, model)
+    output_lines = get_outputs(args, tokenizer, bi_uni_pipeline, model)
     if args.output_file:
         fn_out = args.output_file
     else:
@@ -154,7 +153,6 @@ def prepare_for_get_outputs(args: HBGLTestingArguments, model_recover_path: str)
 
 def get_outputs(
         args: HBGLTestingArguments,
-        device: torch.device,
         tokenizer: BertTokenizer,
         bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
         model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
@@ -171,7 +169,7 @@ def get_outputs(
         buf = [x[1] for x in _chunk]
         batch_count += 1
         with torch.no_grad():
-            traces = buf_to_traces(device, bi_uni_pipeline, model, buf)
+            traces = buf_to_traces(bi_uni_pipeline, model, buf)
 
         output_ids = traces.tolist()
         for i in range(len(buf)):
@@ -185,7 +183,6 @@ def get_outputs(
 
 def get_scores(
         args: HBGLTestingArguments,
-        device: torch.device,
         tokenizer: BertTokenizer,
         bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
         model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
@@ -200,7 +197,7 @@ def get_scores(
         buf = [x[1] for x in _chunk]
         with torch.no_grad():
             # I don't care about the output.
-            buf_to_traces(device, bi_uni_pipeline, model, buf)
+            buf_to_traces(bi_uni_pipeline, model, buf)
 
         current_batch_scores = to_base_model(model).get_last_score_list()
         if current_batch_scores is not None:
@@ -254,11 +251,11 @@ def iter_chunk(input_lines_with_indices: list[tuple[int, list[str]]], batch_size
             pbar.update(1)
 
 def buf_to_traces(
-        device: torch.device,
         bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
         model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
         buf: list[list[str]],
 ) -> torch.Tensor:
+    device = get_device()
     max_a_len = max([len(x) for x in buf])
     instances: list[seq2seq_loader.Preprocess4Seq2seqDecoderOutputType] = []
     for instance in [(x, max_a_len) for x in buf]:
