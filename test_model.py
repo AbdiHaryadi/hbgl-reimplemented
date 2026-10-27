@@ -236,19 +236,22 @@ def get_agrad(
     torch.cuda.empty_cache()
     model.eval()
     input_lines_with_indices = get_input_lines_with_indices(args, tokenizer)
-    result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
+    agrads_result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
+    prediction_result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
 
     for _chunk in iter_chunk(input_lines_with_indices, batch_size=args.batch_size):
         buf_id = [x[0] for x in _chunk]
         buf = [x[1] for x in _chunk]
-        current_batch_agrads = buf_to_agrads(bi_uni_pipeline, model, buf)
-        if current_batch_agrads is None:
+        current_result = buf_to_agrads(bi_uni_pipeline, model, buf)
+        if current_result is None:
             continue
 
+        current_batch_agrads, current_batch_predictions = current_result
         for i in range(len(buf)):
-            result[buf_id[i]] = [agrads_per_level[i] for agrads_per_level in current_batch_agrads]
+            agrads_result[buf_id[i]] = [agrads_per_level[i] for agrads_per_level in current_batch_agrads]
+            prediction_result[buf_id[i]] = [predictions_per_level[i] for predictions_per_level in current_batch_predictions]
 
-    return result
+    return agrads_result, prediction_result
 
 def buf_to_agrads(
     bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
@@ -283,7 +286,7 @@ def buf_to_agrads(
         ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).sum(dim=1)
         current_batch_agrads.append(ca)
 
-    return current_batch_agrads
+    return current_batch_agrads, self_target_list
 
 def to_base_model(model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder]):
     if isinstance(model, torch.nn.DataParallel):
