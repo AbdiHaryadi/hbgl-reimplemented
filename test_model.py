@@ -227,6 +227,64 @@ def get_scores(
 
     return result
 
+def get_agrad(
+        args: HBGLTestingArguments,
+        tokenizer: BertTokenizer,
+        bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
+        model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
+):
+    torch.cuda.empty_cache()
+    model.eval()
+    input_lines_with_indices = get_input_lines_with_indices(args, tokenizer)
+    result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
+
+    for _chunk in iter_chunk(input_lines_with_indices, batch_size=args.batch_size):
+        buf_id = [x[0] for x in _chunk]
+        buf = [x[1] for x in _chunk]
+        current_batch_agrads = buf_to_agrads(bi_uni_pipeline, model, buf)
+        if current_batch_agrads is None:
+            continue
+
+        for i in range(len(buf)):
+            result[buf_id[i]] = [agrads_per_level[i] for agrads_per_level in current_batch_agrads]
+
+    return result
+
+def buf_to_agrads(
+    bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
+    model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
+    buf: list[list[str]],
+):
+    # I don't care about the output.
+    buf_to_traces(bi_uni_pipeline, model, buf)
+
+    current_batch_scores = to_base_model(model).get_last_score_list()
+    current_batch_attention_probs_list = to_base_model(model).get_last_attention_probs_list()
+    if current_batch_scores is None or current_batch_attention_probs_list is None:
+        return None
+        
+    for attention_probs in current_batch_attention_probs_list:
+        attention_probs.retain_grad()
+
+    loss_fct = torch.nn.BCEWithLogitsLoss()
+
+    total_loss = torch.tensor(0.0)
+    self_target_list: list[torch.Tensor] = []
+    for scores in current_batch_scores:
+        self_target = (scores > 0).float()
+        self_target_list.append(self_target)
+        total_loss += loss_fct(scores, self_target)
+        
+    total_loss.backward()
+
+    current_batch_agrads: list[torch.Tensor] = []
+    for attention_probs in current_batch_attention_probs_list:
+        assert attention_probs.grad is not None
+        ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).sum(dim=1)
+        current_batch_agrads.append(ca)
+
+    return current_batch_agrads
+
 def to_base_model(model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder]):
     if isinstance(model, torch.nn.DataParallel):
         return model.module
