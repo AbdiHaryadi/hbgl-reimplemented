@@ -114,7 +114,7 @@ def test(args: HBGLTestingArguments):
             token = token.lower()
             try:
                 token = int(token.replace('[a_', '').replace(']', ''))
-                token = 0 if token >= len(label_to_id_map) else token
+                token = 0 if token >= len(label_mapper) else token
                 return token
             except:
                 return 0
@@ -127,9 +127,8 @@ def test(args: HBGLTestingArguments):
         with open(args.input_file) as f:
             ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
 
-        with open(args.add_vocab_file, 'rb') as f:
-            label_to_id_map = pickle.load(f)
-        id2label = {v: k for k, v in label_to_id_map.items()}
+        label_mapper = LabelMapper.load(args.add_vocab_file)
+        id2label = {label_mapper.label_to_id(label): label for label in label_mapper.get_all_labels()}
         out = evaluate(
             epoch_predicts=predict_labels,
             epoch_labels=ground_labels,
