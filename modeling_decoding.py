@@ -424,7 +424,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         self.ab_bound_token_id = -1
         self.hier_labels = None
 
-        self.last_attention_probs_list = None
+        self.last_attention_probs_list: list[torch.Tensor] | None = None
         self.last_score_list: list[torch.Tensor] | None = None
 
         self.post_init()
