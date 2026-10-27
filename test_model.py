@@ -83,8 +83,7 @@ def test_inner(args: HBGLTestingArguments, model_recover_path: str):
         [i.replace("\n", '') for i in output_lines]
     ]
     predict_labels = [list(set([token_to_id(j) for j  in i])) for i in predict_labels]
-    with open(args.input_file) as f:
-        ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
+    ground_labels = get_ground_flattened_labels(args.input_file)
 
     id2label = {label_mapper.label_to_id(label): label for label in label_mapper.get_all_labels()}
     out = evaluate(
@@ -93,6 +92,29 @@ def test_inner(args: HBGLTestingArguments, model_recover_path: str):
         id2label=id2label,
     )
     return out
+
+def get_ground_flattened_labels(input_file: str) -> list[list[int]]:
+    with open(input_file) as f:
+        ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
+    return ground_labels
+
+def test_inner_for_get_scores(args: HBGLTestingArguments, model_path: str):
+    tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, model_path)
+    scores = get_scores(args, tokenizer, bi_uni_pipeline, model)
+    ground_labels = get_ground_flattened_labels(args.input_file)
+    outputs: list[list[float] | None] = []
+    for current_scores, current_ground_labels in zip(scores, ground_labels):
+        if current_scores is None:
+            outputs.append(None)
+            continue
+
+        # current_scores selalu dimensinya [1, label_vocab_size + 1], dengan indeks 0 adalah EOS.
+        outputs.append([
+            max([score_per_level[0, label_id + 1].item() for score_per_level in current_scores])
+            for label_id in current_ground_labels
+        ])
+
+    return outputs, ground_labels
 
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
