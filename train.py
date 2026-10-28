@@ -99,30 +99,43 @@ def delete_model(path: str):
     except:
         print(f"Warning: Trying to remove path {path}, but can't")
 
-class BestModelManager:
-    def __init__(self) -> None:
+class ModelPersistenceManager:
+    def __init__(self, keep_last_model: bool = True) -> None:
         self.best_macro_f1_score = 0.0
         self.best_micro_f1_score = 0.0
         self.best_macro_f1_path: str | None = None
         self.best_micro_f1_path: str | None = None
+        self.last_saved_model_path: str | None = None
+        self.keep_last_model = keep_last_model
 
     def handle(self, new_path: str, new_macro_f1_score: float | None, new_micro_f1_score: float | None):
-        keep_save_model = False
+        if (
+            self.last_saved_model_path is not None
+            and self.last_saved_model_path != self.best_macro_f1_path
+            and self.last_saved_model_path != self.best_micro_f1_path
+        ):
+            delete_model(self.last_saved_model_path)
+
+        self.last_saved_model_path = new_path
+
+        better_model = False
         if new_macro_f1_score is not None and new_macro_f1_score > self.best_macro_f1_score:
             self.best_macro_f1_score = new_macro_f1_score
             if self.best_macro_f1_path != self.best_micro_f1_path and self.best_macro_f1_path is not None:
                 delete_model(self.best_macro_f1_path)
             self.best_macro_f1_path = new_path
-            keep_save_model = True
+            better_model = True
 
         if new_micro_f1_score is not None and new_micro_f1_score > self.best_micro_f1_score:
             self.best_micro_f1_score = new_micro_f1_score
             if self.best_macro_f1_path != self.best_micro_f1_path and self.best_micro_f1_path is not None:
                 delete_model(self.best_micro_f1_path)
             self.best_micro_f1_path = new_path
-            keep_save_model = True
+            better_model = True
 
-        return keep_save_model
+        if (not better_model) and (not self.keep_last_model):
+            delete_model(new_path)
+            self.last_saved_model_path = None
 
 class GlobalStepManager:
     def __init__(self, args: HBGLTrainingArguments):
@@ -142,7 +155,7 @@ class HBGLTrainer:
     def __init__(self, args: HBGLTrainingArguments):
         self.args = args
         self.loss_logger = HBGLLossLogger(args)
-        self.model_manager = BestModelManager()
+        self.model_manager = ModelPersistenceManager()
         self.global_step_manager = GlobalStepManager(args)
 
     def get_current_global_step(self):
@@ -305,13 +318,11 @@ class HBGLTrainer:
                         if self.args.wandb:
                             wandb.log({'eval/macro_f1': new_macro_f1, 'eval/micro_f1': new_micro_f1})
 
-                        keep_save_model = self.model_manager.handle(
+                        self.model_manager.handle(
                             save_path,
                             new_macro_f1_score=new_macro_f1,
                             new_micro_f1_score=new_micro_f1
                         )
-                        if not keep_save_model:
-                            delete_model(save_path)
                                     
                         self.after_evaluate_step()
     
