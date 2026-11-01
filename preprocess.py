@@ -32,7 +32,7 @@ def wos_text_transform(string: str):
 
 T = TypeVar('T')
 
-def label_attribute_list_v1_to_v2(x: T | list[T] | list[list[T]]) -> T | list[T] | list[list[T]]:
+def label_attribute_list_from_list_of_path(x: T | list[T] | list[list[T]]) -> T | list[T] | list[list[T]]:
     if not (isinstance(x, list) and isinstance(x[0], list)):
         return x
 
@@ -48,7 +48,7 @@ def label_attribute_list_v1_to_v2(x: T | list[T] | list[list[T]]) -> T | list[T]
             
     return new_x
 
-class PreprocessorConfigV2:
+class PreprocessorConfig:
     def __init__(
             self,
             text_attribute: str,
@@ -66,15 +66,15 @@ class PreprocessorConfigV2:
         self.id_attribute_list = label_id_attribute_list
 
     @staticmethod
-    def from_v1(
+    def from_list_of_path(
             text_attribute: str,
             label_attribute_list: str | list[str] | list[list[str]],
             label_id_attribute_list = None,
     ):
-        return PreprocessorConfigV2(
+        return PreprocessorConfig(
             text_attribute=text_attribute,
-            label_attribute_list=label_attribute_list_v1_to_v2(label_attribute_list),
-            label_id_attribute_list=None if label_id_attribute_list is None else label_attribute_list_v1_to_v2(label_id_attribute_list),
+            label_attribute_list=label_attribute_list_from_list_of_path(label_attribute_list),
+            label_id_attribute_list=None if label_id_attribute_list is None else label_attribute_list_from_list_of_path(label_id_attribute_list),
         )
 
     def two_dimension_processing(self, x: T | list[T] | list[list[T]]) -> list[list[T]]:
@@ -134,8 +134,8 @@ class PreprocessorState:
     parent_childs_map: dict[str, list[str]]
     label_to_id_map: LabelToIdType
 
-class PreprocessorV2:
-    def __init__(self, config: PreprocessorConfigV2):
+class Preprocessor:
+    def __init__(self, config: PreprocessorConfig):
         self.config = config
         self.state: PreprocessorState | None = None
 
@@ -149,7 +149,7 @@ class PreprocessorV2:
         )
         return self
 
-    def generate_code_to_most_frequent_label_map(self, df: pd.DataFrame, config: PreprocessorConfigV2) -> dict[tuple[int, str], str]:
+    def generate_code_to_most_frequent_label_map(self, df: pd.DataFrame, config: PreprocessorConfig) -> dict[tuple[int, str], str]:
         stats: dict[tuple[int, str], dict[str, int]] = {}
         for _, row in df.iterrows():
             for level_index, (label_attribute, id_attribute) in enumerate(zip(config.label_attribute_list, config.id_attribute_list)):
