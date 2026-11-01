@@ -267,9 +267,10 @@ class PreprocessorV2:
         stats: dict[tuple[int, str], dict[str, int]] = {}
         for _, row in df.iterrows():
             for level_index, (label_attribute, id_attribute) in enumerate(zip(config.label_attribute_list, config.id_attribute_list)):
+                label_exists_in_current_level = False
                 for label_attribute_i, id_attribute_i in zip(label_attribute, id_attribute):
                     if pd.isna(row[label_attribute_i]) or pd.isna(row[id_attribute_i]):
-                        break
+                        continue
 
                     key = (level_index, str(row[id_attribute_i]).strip())
                     label = row[label_attribute_i].strip()
@@ -279,6 +280,10 @@ class PreprocessorV2:
                         stats[key][label] = 1
                     else:
                         stats[key][label] += 1
+                    label_exists_in_current_level = True
+
+                if not label_exists_in_current_level:
+                    break
 
         return {
             key: max(stats_per_key.keys(), key=lambda x: stats_per_key[x])
@@ -297,12 +302,16 @@ class PreprocessorV2:
                 label_list = []
                 for id_attribute_i in id_attribute:
                     if pd.isna(row[id_attribute_i]):
-                        break
+                        continue
     
                     label_list.append(code_to_label_map[(
                         level_index,
                         str(row[id_attribute_i]).strip()
                     )])
+
+                if len(label_list) == 0:
+                    break
+
                 labels.append(label_list)
             
             data.append({
