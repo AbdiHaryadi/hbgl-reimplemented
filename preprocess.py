@@ -38,21 +38,6 @@ class PreprocessorConfig:
             label_id_attribute_list = None,
     ):
         label_attribute_list = two_dimension_processing(label_attribute_list)
-        if isinstance(label_attribute_list, str):
-            label_attribute_list = [[label_attribute_list]]
-        elif isinstance(label_attribute_list[0], str):
-            new_label_attribute_list: list[list[str]] = [[]]
-            for label in label_attribute_list:
-                assert isinstance(label, str)
-                new_label_attribute_list[0].append(label)
-            label_attribute_list = new_label_attribute_list
-        else:
-            new_label_attribute_list: list[list[str]] = []
-            for label in label_attribute_list:
-                assert isinstance(label, list)
-                new_label_attribute_list.append(label)
-            label_attribute_list = new_label_attribute_list
-
         if label_id_attribute_list is None:
             label_id_attribute_list = label_attribute_list
         else:
