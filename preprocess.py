@@ -32,6 +32,22 @@ def wos_text_transform(string: str):
 
 T = TypeVar('T')
 
+def label_attribute_list_v1_to_v2(x: T | list[T] | list[list[T]]) -> T | list[T] | list[list[T]]:
+    if not (isinstance(x, list) and isinstance(x[0], list)):
+        return x
+
+    new_x: list[list[T]] = []
+    for xi in x:
+        assert isinstance(xi, list)
+        for level_index, xij in enumerate(xi):
+            if len(new_x) == level_index:
+                new_x.append([])
+
+            if xij not in new_x[level_index]:
+                new_x[level_index].append(xij)
+            
+    return new_x
+
 class PreprocessorConfig:
     def __init__(
             self,
@@ -82,6 +98,18 @@ class PreprocessorConfigV2:
         self.text_attribute = text_attribute
         self.label_attribute_list = label_attribute_list
         self.id_attribute_list = label_id_attribute_list
+
+    @staticmethod
+    def from_v1(
+            text_attribute: str,
+            label_attribute_list: str | list[str] | list[list[str]],
+            label_id_attribute_list = None,
+    ):
+        return PreprocessorConfigV2(
+            text_attribute=text_attribute,
+            label_attribute_list=label_attribute_list_v1_to_v2(label_attribute_list),
+            label_id_attribute_list=None if label_id_attribute_list is None else label_attribute_list_v1_to_v2(label_id_attribute_list),
+        )
 
     def two_dimension_processing(self, x: T | list[T] | list[list[T]]) -> list[list[T]]:
         if not isinstance(x, list):
