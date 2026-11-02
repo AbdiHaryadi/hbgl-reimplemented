@@ -122,7 +122,8 @@ class LabelMapper:
             return cls(pickle.load(f))
 
     @classmethod
-    def from_data_with_path_list_labels(cls, data: list[dict]):
+    def from_data_with_labels(cls, data: list[dict]):
+        # Support either with path-list labels or per-level labels
         label_to_id_map = {label: i for i, label in enumerate(
             sorted(list(set(sum([sum([k for k in j['labels']], []) for j in data], []))))
         )}
