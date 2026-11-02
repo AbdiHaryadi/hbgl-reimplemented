@@ -13,14 +13,11 @@ from tqdm import tqdm
 import wandb
 
 from args import HBGLTrainingArguments
-from main import prepare as prepare_args
+import main
 from hierarchy import HIERARCHY_ROOT_NAME, LabelHierarchy
-from prepare import get_model_and_tokenizer
 from preprocess import PreprocessorV2 as Preprocessor, PreprocessorConfigV2 as PreprocessorConfig
-from train import HBGLTrainer
-from utils import load_and_cache_examples
 
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 def get_tag_from_soup_or_raise(soup: BeautifulSoup, name: str):
     el = soup.find(name)
@@ -72,6 +69,10 @@ def write_bgc_jsonl(filepath: Path, data: List):
             out_f.write(f"{json.dumps(s)}\n")
 
 def parse_and_write(input_filepath: Path, output_filepath: Path):
+    if os.path.exists(output_filepath):
+        print(f"Skip processing {input_filepath} because {output_filepath} already exists.")
+        return
+    
     data = parse_books(input_filepath)
     data = [{k: v for k, v in d.items() if k not in ["labels", "flat_label"]} for d in data]
     write_bgc_jsonl(output_filepath, data)
@@ -92,6 +93,59 @@ def save_preprocessed_data(data: list[dict[str, Any]], path: str | Path):
     with open(path, mode="w") as fp:
         for instance in data:
             print(json.dumps(instance), file=fp)
+
+def preprocess_procedure(
+        input_train_jsonl_path: Path,
+        input_test_jsonl_path: Path,
+        input_val_jsonl_path: Path,
+        input_hierarchy_path: Path,
+        output_train_jsonl_path: Path,
+        output_test_jsonl_path: Path,
+        output_val_jsonl_path: Path,
+        output_label_map_path: Path,
+        output_hierarchy_path: Path,
+):
+    train_df = load_df_from_jsonl(input_train_jsonl_path)
+    test_df = load_df_from_jsonl(input_test_jsonl_path)
+    val_df = load_df_from_jsonl(input_val_jsonl_path)
+    assert (
+        set(train_df.columns)
+        == set(test_df.columns)
+        == set(val_df.columns)
+    )
+
+    hierarchical_setting = True
+    config = PreprocessorConfig(
+        text_attribute="text",
+        label_attribute_list=(
+            [
+                [c for c in train_df.columns
+                 if c.startswith(f"label_{level_index}")]
+                for level_index in range(4)
+            ] if hierarchical_setting
+            else [[c for c in train_df.columns if c.startswith("label")]]
+        )
+    )
+    preprocessor = Preprocessor(config)
+    preprocessed_train_data = preprocessor.fit_transform(train_df)
+    preprocessed_test_data = preprocessor.transform(test_df)
+    preprocessed_val_data = preprocessor.transform(val_df)
+
+    save_preprocessed_data(preprocessed_train_data, output_train_jsonl_path)
+    save_preprocessed_data(preprocessed_test_data, output_test_jsonl_path)
+    save_preprocessed_data(preprocessed_val_data, output_val_jsonl_path)
+
+    preprocessor.get_label_mapper().save(output_label_map_path)
+
+    parent_to_childs_map = {}
+    with open(input_hierarchy_path) as fp:
+        for i, line in enumerate(fp):
+            parent, *childs = line.strip().split()
+            if i == 0:
+                assert parent == "root"
+                parent = HIERARCHY_ROOT_NAME
+            parent_to_childs_map[parent] = childs
+    LabelHierarchy(parent_to_childs_map).save(output_hierarchy_path)
 
 if __name__ == "__main__":
     # Need to run this:
@@ -123,54 +177,33 @@ if __name__ == "__main__":
     _test_file_prep = data_root / "test_preprocessed.jsonl"
     _val_file_prep = data_root / "val_preprocessed.jsonl"
 
-    data_root.mkdir(parents=True, exist_ok=True)
     parse_and_write(_train_file, _train_file_l)
     parse_and_write(_test_file, _test_file_l)
     parse_and_write(_val_file, _val_file_l)
 
-    train_df = load_df_from_jsonl(_train_file_l)
-    test_df = load_df_from_jsonl(_test_file_l)
-    val_df = load_df_from_jsonl(_val_file_l)
-    assert (
-        set(train_df.columns)
-        == set(test_df.columns)
-        == set(val_df.columns)
-    )
-
-    hierarchical_setting = True
-    config = PreprocessorConfig(
-        text_attribute="text",
-        label_attribute_list=(
-            [
-                [c for c in train_df.columns
-                 if c.startswith(f"label_{level_index}")]
-                for level_index in range(4)
-            ] if hierarchical_setting
-            else [[c for c in train_df.columns if c.startswith("label")]]
-        )
-    )
-    preprocessor = Preprocessor(config)
-    preprocessed_train_data = preprocessor.fit_transform(train_df)
-    preprocessed_test_data = preprocessor.transform(test_df)
-    preprocessed_val_data = preprocessor.transform(val_df)
-
-    save_preprocessed_data(preprocessed_train_data, _train_file_prep)
-    save_preprocessed_data(preprocessed_test_data, _test_file_prep)
-    save_preprocessed_data(preprocessed_val_data, _val_file_prep)
-
     label_map_path = data_root / "label_map.pkl"
-    preprocessor.get_label_mapper().save(label_map_path)
-
-    parent_to_childs_map = {}
-    with open(data_root / "bgc_tax.txt") as fp:
-        for i, line in enumerate(fp):
-            parent, *childs = line.strip().split()
-            if i == 0:
-                assert parent == "root"
-                parent = HIERARCHY_ROOT_NAME
-            parent_to_childs_map[parent] = childs
     hierarchy_path = data_root / "bgc.taxonomy"
-    LabelHierarchy(parent_to_childs_map).save(hierarchy_path)
+
+    if not all(os.path.exists(path) for path in [
+        _train_file_prep,
+        _test_file_prep,
+        _val_file_prep,
+        label_map_path,
+        hierarchy_path,
+    ]):
+        preprocess_procedure(
+            input_train_jsonl_path=_train_file_l,
+            input_test_jsonl_path=_test_file_l,
+            input_val_jsonl_path=_val_file_l,
+            input_hierarchy_path=data_root / "bgc_tax.txt",
+            output_train_jsonl_path=_train_file_prep,
+            output_test_jsonl_path=_test_file_prep,
+            output_val_jsonl_path=_val_file_prep,
+            output_label_map_path=label_map_path,
+            output_hierarchy_path=hierarchy_path
+        )
+    else:
+        print("Skip preprocess because all outputs are already available")
 
     args = HBGLTrainingArguments(
         train_file=str(_train_file_prep),
@@ -198,25 +231,8 @@ if __name__ == "__main__":
         label_cpt_steps=300,
         label_cpt_use_bce=True,
     )
-    prepare_args(args)
-    model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
-    training_features = load_and_cache_examples(
-        example_file=args.train_file,
-        tokenizer=tokenizer,
-        local_rank=args.local_rank,
-        cached_features_file=(
-            os.path.join(args.output_dir, "cached_features_for_training.pt")
-            if args.cached_train_features_file is None
-            else args.cached_train_features_file
-        ) + "soft_label",
-        shuffle=True,
-    )
-
-    trainer = HBGLTrainer(args)
     try:
-        best_macro_f1_path, best_micro_f1_path = trainer.train(training_features, model, tokenizer)
-        print(f"[Test] {best_macro_f1_path=}")
-        print(f"[Test] {best_micro_f1_path=}")
+        main.main(args)
     finally:
         hf_api.upload_folder(
             folder_path=args.output_dir,

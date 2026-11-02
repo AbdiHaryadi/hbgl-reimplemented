@@ -108,8 +108,9 @@ def set_hier_labels_in_model(model, hier_labels):
 
     model.hier_labels = [to_multi_hot(i) for i in hier_labels]
 
-def main():
-    args = parse_to_training_arguments()
+def main(args: HBGLTrainingArguments | None = None):
+    if args is None:
+        args = parse_to_training_arguments()
     prepare(args)
     if args.only_test:
         args.wandb = False
