@@ -236,17 +236,21 @@ class Preprocessor:
         assert self.state is not None, "Fit it first."
         return LabelMapper(self.state.label_to_id_map)
 
+@dataclass
+class PreprocessorStateV2:
+    code_to_label_map: dict[tuple[int, str], str]
+    label_to_id_map: LabelToIdType
+
 class PreprocessorV2:
     def __init__(self, config: PreprocessorConfigV2):
         self.config = config
-        self.state: PreprocessorState | None = None
+        self.state: PreprocessorStateV2 | None = None
 
     def fit(self, df: pd.DataFrame):
         code_to_label_map = self.generate_code_to_most_frequent_label_map(df, config=self.config)
         data = self.data_df_to_data_list(df=df, code_to_label_map=code_to_label_map)
-        self.state = PreprocessorState(
+        self.state = PreprocessorStateV2(
             code_to_label_map=code_to_label_map,
-            parent_childs_map=get_hierarchy_from_list(data),
             label_to_id_map=make_label_to_id_map(data),
         )
         return self
@@ -329,10 +333,6 @@ class PreprocessorV2:
 
     def fit_transform(self, df: pd.DataFrame):
         return self.fit(df).transform(df)
-
-    def get_hierarchy(self):
-        assert self.state is not None, "Fit it first."
-        return LabelHierarchy(self.state.parent_childs_map)
 
     def get_label_mapper(self):
         assert self.state is not None, "Fit it first."
