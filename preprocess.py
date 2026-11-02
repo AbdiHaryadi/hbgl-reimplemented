@@ -134,9 +134,7 @@ def get_hierarchy_from_list(data):
 
 LabelToIdType = dict[str, int]
 def make_label_to_id_map(data: list[dict]) -> LabelToIdType:
-    return {label: i for i, label in enumerate(
-        sorted(list(set(sum([sum([k for k in j['labels']], []) for j in data], []))))
-    )}
+    return LabelMapper.from_data_with_path_list_labels(data).label_to_id_map
 
 def label_to_tgt_list(label_to_id_map: LabelToIdType, labels: list[list[str]]):
     max_depth = max(len(label_list) for label_list in labels)

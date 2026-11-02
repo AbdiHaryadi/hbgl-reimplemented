@@ -87,8 +87,10 @@ class LabelHierarchy:
 
         return cls(parent_childs_map)
 
+LabelType = str
+LabelToIdType = dict[LabelType, int]
 class LabelMapper:
-    def __init__(self, label_to_id_map: dict[str, int]):
+    def __init__(self, label_to_id_map: LabelToIdType):
         self.label_to_id_map = label_to_id_map
 
     def get_all_labels(self):
@@ -97,11 +99,11 @@ class LabelMapper:
     def get_all_ids(self):
         return list(self.label_to_id_map.values())
 
-    def label_to_id(self, label: str):
+    def label_to_id(self, label: LabelType):
         # Kinda coupled with LabelHierarchy, but it's okay for now.
         return self.label_to_id_map[label] if label != HIERARCHY_ROOT_NAME else -1
 
-    def label_to_token(self, label: str):
+    def label_to_token(self, label: LabelType):
         return id_to_label_token(self.label_to_id(label))
 
     def get_all_tokens(self):
@@ -118,3 +120,10 @@ class LabelMapper:
     def load(cls, path):
         with open(path, 'rb') as f:
             return cls(pickle.load(f))
+
+    @classmethod
+    def from_data_with_path_list_labels(cls, data: list[dict]):
+        label_to_id_map = {label: i for i, label in enumerate(
+            sorted(list(set(sum([sum([k for k in j['labels']], []) for j in data], []))))
+        )}
+        return cls(label_to_id_map)
