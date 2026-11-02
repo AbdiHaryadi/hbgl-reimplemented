@@ -581,7 +581,7 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             None,
             inputs_embeds=self.create_input_embeds(source_ids, target_ids, pseudo_ids),
             attention_mask=self.create_attention_mask(source_mask, target_mask, source_position_ids, target_span_ids),
-            token_type_ids=self.create_token_type_ids(source_ids, target_ids),
+            token_type_ids=self.create_token_type_ids(source_ids, pseudo_ids),
             position_ids=torch.cat((source_position_ids, target_position_ids, target_position_ids), dim=1),
             split_lengths=(source_len, target_len, pseudo_len))
 
@@ -596,11 +596,11 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
 
         return pseudo_lm_loss
 
-    def create_token_type_ids(self, source_ids, target_ids: torch.Tensor):
+    def create_token_type_ids(self, source_ids: torch.Tensor, pseudo_ids: torch.Tensor):
         return torch.cat(
                 (torch.ones_like(source_ids) * self.source_type_id,
-                    torch.ones_like(target_ids) * self.target_type_id,
-                    torch.ones_like(target_ids) * self.target_type_id), dim=1)
+                    torch.ones_like(pseudo_ids) * self.target_type_id,
+                    torch.ones_like(pseudo_ids) * self.target_type_id), dim=1)
 
     def create_input_embeds(self, source_ids: torch.Tensor, target_ids: torch.Tensor, pseudo_ids: torch.Tensor):
         source_ids_embeds = self.bert.embeddings.word_embeddings(source_ids)
