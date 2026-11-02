@@ -9,6 +9,7 @@
 # I didn't put it here because it may uses GPU or CPU, and I can't serve it automatically.
 # Note that maybe Torch 2.15.0 is the current stable version, but I didn't test it yet.
 
+beautifulsoup4==4.15.0
 # numpy can also use 2.5.4
 numpy>=2.1.3
 pandas==2.3.3
