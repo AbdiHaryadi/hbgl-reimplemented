@@ -30,6 +30,24 @@ def wos_text_transform(string: str):
     # Remove leading and trailing spaces, then lowercase
     return string.strip().lower()
 
+T = TypeVar('T')
+
+def label_attribute_list_v1_to_v2(x: T | list[T] | list[list[T]]) -> T | list[T] | list[list[T]]:
+    if not (isinstance(x, list) and isinstance(x[0], list)):
+        return x
+
+    new_x: list[list[T]] = []
+    for xi in x:
+        assert isinstance(xi, list)
+        for level_index, xij in enumerate(xi):
+            if len(new_x) == level_index:
+                new_x.append([])
+
+            if xij not in new_x[level_index]:
+                new_x[level_index].append(xij)
+            
+    return new_x
+
 class PreprocessorConfig:
     def __init__(
             self,
@@ -37,91 +55,86 @@ class PreprocessorConfig:
             label_attribute_list: str | list[str] | list[list[str]],
             label_id_attribute_list = None,
     ):
-        label_attribute_list = two_dimension_processing(label_attribute_list)
-        if isinstance(label_attribute_list, str):
-            label_attribute_list = [[label_attribute_list]]
-        elif isinstance(label_attribute_list[0], str):
-            new_label_attribute_list: list[list[str]] = [[]]
-            for label in label_attribute_list:
-                assert isinstance(label, str)
-                new_label_attribute_list[0].append(label)
-            label_attribute_list = new_label_attribute_list
-        else:
-            new_label_attribute_list: list[list[str]] = []
-            for label in label_attribute_list:
-                assert isinstance(label, list)
-                new_label_attribute_list.append(label)
-            label_attribute_list = new_label_attribute_list
-
+        label_attribute_list = self.two_dimension_processing(label_attribute_list)
         if label_id_attribute_list is None:
             label_id_attribute_list = label_attribute_list
         else:
-            label_id_attribute_list = two_dimension_processing(label_id_attribute_list)
+            label_id_attribute_list = self.two_dimension_processing(label_id_attribute_list)
 
         self.text_attribute = text_attribute
         self.label_attribute_list = label_attribute_list
         self.id_attribute_list = label_id_attribute_list
 
-T = TypeVar('T')
-def two_dimension_processing(x: T | list[T] | list[list[T]]) -> list[list[T]]:
-    if not isinstance(x, list):
-        return [[x]]
-    
-    if not isinstance(x[0], list):
-        new_x: list[list[T]] = [[]]
-        for xi in x:
-            assert not isinstance(xi, list)
-            new_x[0].append(xi)  # type: ignore
-        return new_x
-    else:
-        new_x: list[list[T]] = []
-        for xi in x:
-            assert isinstance(xi, list)
-            new_x.append(xi)
-        return new_x
+    def two_dimension_processing(self, x: T | list[T] | list[list[T]]) -> list[list[T]]:
+        if not isinstance(x, list):
+            return [[x]]
+        
+        if not isinstance(x[0], list):
+            new_x: list[list[T]] = [[]]
+            for xi in x:
+                assert not isinstance(xi, list)
+                new_x[0].append(xi)  # type: ignore
+            return new_x
+        else:
+            new_x: list[list[T]] = []
+            for xi in x:
+                assert isinstance(xi, list)
+                new_x.append(xi)
+            return new_x
 
-def generate_code_to_most_frequent_label_map(df: pd.DataFrame, config: PreprocessorConfig) -> dict[tuple[int, str], str]:
-    stats: dict[tuple[int, str], dict[str, int]] = {}
-    for _, row in df.iterrows():
-        for label_attribute, id_attribute in zip(config.label_attribute_list, config.id_attribute_list):
-            for level_index, (label_attribute_i, id_attribute_i) in enumerate(zip(label_attribute, id_attribute)):
-                if pd.isna(row[label_attribute_i]) or pd.isna(row[id_attribute_i]):
-                    break
+class PreprocessorConfigV2:
+    def __init__(
+            self,
+            text_attribute: str,
+            label_attribute_list: str | list[str] | list[list[str]],
+            label_id_attribute_list = None,
+    ):
+        label_attribute_list = self.two_dimension_processing(label_attribute_list)
+        if label_id_attribute_list is None:
+            label_id_attribute_list = label_attribute_list
+        else:
+            label_id_attribute_list = self.two_dimension_processing(label_id_attribute_list)
 
-                key = (level_index, str(row[id_attribute_i]).strip())
-                label = row[label_attribute_i].strip()
-                if key not in stats:
-                    stats[key] = {row[label_attribute_i].strip(): 1}
-                elif label not in stats[key]:
-                    stats[key][label] = 1
-                else:
-                    stats[key][label] += 1
+        self.text_attribute = text_attribute
+        self.label_attribute_list = label_attribute_list
+        self.id_attribute_list = label_id_attribute_list
 
-    return {
-        key: max(stats_per_key.keys(), key=lambda x: stats_per_key[x])
-        for key, stats_per_key in stats.items()
-    }
+    @staticmethod
+    def from_v1(
+            text_attribute: str,
+            label_attribute_list: str | list[str] | list[list[str]],
+            label_id_attribute_list = None,
+    ):
+        return PreprocessorConfigV2(
+            text_attribute=text_attribute,
+            label_attribute_list=label_attribute_list_v1_to_v2(label_attribute_list),
+            label_id_attribute_list=None if label_id_attribute_list is None else label_attribute_list_v1_to_v2(label_id_attribute_list),
+        )
+
+    def two_dimension_processing(self, x: T | list[T] | list[list[T]]) -> list[list[T]]:
+        if not isinstance(x, list):
+            return [[x]]
+        
+        if not isinstance(x[0], list):
+            # Changed only in this section.
+            new_x: list[list[T]] = []
+            for xi in x:
+                assert not isinstance(xi, list)
+                new_x.append([xi])  # type: ignore
+            return new_x
+        else:
+            new_x: list[list[T]] = []
+            for xi in x:
+                assert isinstance(xi, list)
+                new_x.append(xi)
+            return new_x
 
 def get_hierarchy_from_list(data):
-    label_hierarchy: dict[str, list[str]] = {}
-    for instance in data:
-        labels = instance["labels"]
-
-        for label_list in labels:
-            current_parent = "Root"
-            for label in label_list:
-                if current_parent not in label_hierarchy:
-                    label_hierarchy[current_parent] = []
-                elif label not in label_hierarchy[current_parent]:
-                    label_hierarchy[current_parent].append(label)
-                current_parent = label
-    return label_hierarchy
+    return LabelHierarchy.from_data_with_path_list_labels(data).parent_childs_map
 
 LabelToIdType = dict[str, int]
 def make_label_to_id_map(data: list[dict]) -> LabelToIdType:
-    return {label: i for i, label in enumerate(
-        sorted(list(set(sum([sum([k for k in j['labels']], []) for j in data], []))))
-    )}
+    return LabelMapper.from_data_with_labels(data).label_to_id_map
 
 def label_to_tgt_list(label_to_id_map: LabelToIdType, labels: list[list[str]]):
     max_depth = max(len(label_list) for label_list in labels)
@@ -147,7 +160,7 @@ class Preprocessor:
         self.state: PreprocessorState | None = None
 
     def fit(self, df: pd.DataFrame):
-        code_to_label_map = generate_code_to_most_frequent_label_map(df, config=self.config)
+        code_to_label_map = self.generate_code_to_most_frequent_label_map(df, config=self.config)
         data = self.data_df_to_data_list(df=df, code_to_label_map=code_to_label_map)
         self.state = PreprocessorState(
             code_to_label_map=code_to_label_map,
@@ -155,6 +168,28 @@ class Preprocessor:
             label_to_id_map=make_label_to_id_map(data),
         )
         return self
+
+    def generate_code_to_most_frequent_label_map(self, df: pd.DataFrame, config: PreprocessorConfig) -> dict[tuple[int, str], str]:
+        stats: dict[tuple[int, str], dict[str, int]] = {}
+        for _, row in df.iterrows():
+            for label_attribute, id_attribute in zip(config.label_attribute_list, config.id_attribute_list):
+                for level_index, (label_attribute_i, id_attribute_i) in enumerate(zip(label_attribute, id_attribute)):
+                    if pd.isna(row[label_attribute_i]) or pd.isna(row[id_attribute_i]):
+                        break
+
+                    key = (level_index, str(row[id_attribute_i]).strip())
+                    label = row[label_attribute_i].strip()
+                    if key not in stats:
+                        stats[key] = {row[label_attribute_i].strip(): 1}
+                    elif label not in stats[key]:
+                        stats[key][label] = 1
+                    else:
+                        stats[key][label] += 1
+
+        return {
+            key: max(stats_per_key.keys(), key=lambda x: stats_per_key[x])
+            for key, stats_per_key in stats.items()
+        }
 
     def data_df_to_data_list(
             self,
@@ -194,6 +229,108 @@ class Preprocessor:
     def get_hierarchy(self):
         assert self.state is not None, "Fit it first."
         return LabelHierarchy(self.state.parent_childs_map)
+
+    def get_label_mapper(self):
+        assert self.state is not None, "Fit it first."
+        return LabelMapper(self.state.label_to_id_map)
+
+@dataclass
+class PreprocessorStateV2:
+    code_to_label_map: dict[tuple[int, str], str]
+    label_to_id_map: LabelToIdType
+
+class PreprocessorV2:
+    def __init__(self, config: PreprocessorConfigV2):
+        self.config = config
+        self.state: PreprocessorStateV2 | None = None
+
+    def fit(self, df: pd.DataFrame):
+        code_to_label_map = self.generate_code_to_most_frequent_label_map(df, config=self.config)
+        data = self.data_df_to_data_list(df=df, code_to_label_map=code_to_label_map)
+        self.state = PreprocessorStateV2(
+            code_to_label_map=code_to_label_map,
+            label_to_id_map=make_label_to_id_map(data),
+        )
+        return self
+
+    def generate_code_to_most_frequent_label_map(self, df: pd.DataFrame, config: PreprocessorConfigV2) -> dict[tuple[int, str], str]:
+        stats: dict[tuple[int, str], dict[str, int]] = {}
+        for _, row in df.iterrows():
+            for level_index, (label_attribute, id_attribute) in enumerate(zip(config.label_attribute_list, config.id_attribute_list)):
+                label_exists_in_current_level = False
+                for label_attribute_i, id_attribute_i in zip(label_attribute, id_attribute):
+                    if pd.isna(row[label_attribute_i]) or pd.isna(row[id_attribute_i]):
+                        continue
+
+                    key = (level_index, str(row[id_attribute_i]).strip())
+                    label = row[label_attribute_i].strip()
+                    if key not in stats:
+                        stats[key] = {row[label_attribute_i].strip(): 1}
+                    elif label not in stats[key]:
+                        stats[key][label] = 1
+                    else:
+                        stats[key][label] += 1
+                    label_exists_in_current_level = True
+
+                if not label_exists_in_current_level:
+                    break
+
+        return {
+            key: max(stats_per_key.keys(), key=lambda x: stats_per_key[x])
+            for key, stats_per_key in stats.items()
+        }
+
+    def data_df_to_data_list(
+            self,
+            df: pd.DataFrame,
+            code_to_label_map: dict[tuple[int, str], str],
+    ):
+        data: list[dict] = []
+        for _, row in df.iterrows():
+            labels = []
+            for level_index, id_attribute in enumerate(self.config.id_attribute_list):
+                label_list = []
+                for id_attribute_i in id_attribute:
+                    if pd.isna(row[id_attribute_i]):
+                        continue
+    
+                    label_list.append(code_to_label_map[(
+                        level_index,
+                        str(row[id_attribute_i]).strip()
+                    )])
+
+                if len(label_list) == 0:
+                    break
+
+                labels.append(label_list)
+            
+            data.append({
+                'text': row[self.config.text_attribute].strip().lower(),
+                'labels': labels
+            })
+    
+        return data
+
+    def transform(self, df: pd.DataFrame):
+        assert self.state is not None, "Fit it first."
+        data = self.data_df_to_data_list(df=df, code_to_label_map=self.state.code_to_label_map)
+        return self.transform_to_src_tgt(label_to_id_map=self.state.label_to_id_map, data=data)
+
+    def transform_to_src_tgt(self, label_to_id_map: LabelToIdType, data: list[dict]):
+        return [
+            {'src': l['text'], 'tgt': self.label_to_tgt_list(label_to_id_map, l['labels']) }
+            for l in data
+        ]
+
+    def label_to_tgt_list(self, label_to_id_map: LabelToIdType, labels: list[list[str]]):
+        return [
+            sorted(list(set([label_to_id_map[label_list_i]
+                             for label_list_i in label_list_per_level]))) 
+                             for label_list_per_level in labels
+        ]
+
+    def fit_transform(self, df: pd.DataFrame):
+        return self.fit(df).transform(df)
 
     def get_label_mapper(self):
         assert self.state is not None, "Fit it first."
