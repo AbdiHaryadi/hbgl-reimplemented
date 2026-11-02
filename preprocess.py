@@ -130,20 +130,7 @@ class PreprocessorConfigV2:
             return new_x
 
 def get_hierarchy_from_list(data):
-    # Duplicated in hierarchy.py
-    label_hierarchy: dict[str, list[str]] = {}
-    for instance in data:
-        labels = instance["labels"]
-
-        for label_list in labels:
-            current_parent = "Root"
-            for label in label_list:
-                if current_parent not in label_hierarchy:
-                    label_hierarchy[current_parent] = []
-                elif label not in label_hierarchy[current_parent]:
-                    label_hierarchy[current_parent].append(label)
-                current_parent = label
-    return label_hierarchy
+    return LabelHierarchy.from_path_list(data).parent_childs_map
 
 LabelToIdType = dict[str, int]
 def make_label_to_id_map(data: list[dict]) -> LabelToIdType:
