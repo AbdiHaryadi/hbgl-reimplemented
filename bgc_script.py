@@ -152,12 +152,16 @@ if __name__ == "__main__":
     # wget https://fiona.uni-hamburg.de/ca89b3cf/blurbgenrecollectionen.zip -O data/blurbgenrecollectionen.zip
     # unzip data/blurbgenrecollectionen.zip -d data/bgc
     # wget https://gitlab.com/distration/dsi-nlp-publib/-/raw/main/htc-survey-24/data/taxonomies/bgc_tax.txt -O data/bgc/bgc_tax.txt
-    huggingface_hub.login(os.environ["HUGGINGFACE_TOKEN"])
+    if os.environ["HUGGINGFACE_TOKEN"]:
+        huggingface_hub.login(os.environ["HUGGINGFACE_TOKEN"])
+        hf_api = huggingface_hub.HfApi()
+    else:
+        hf_api = None
     wandb.login(os.environ["WANDB_KEY"])
 
-    hf_api = huggingface_hub.HfApi()
+    
     REPO_ID = os.environ["REPO_ID"]
-    if REPO_ID:
+    if hf_api and REPO_ID:
         hf_api.create_repo(
             repo_id=REPO_ID,
             exist_ok=True,
@@ -214,8 +218,8 @@ if __name__ == "__main__":
 
         max_source_seq_length=500,
         max_target_seq_length=5,  # Depth maximum + 1, jadi harusnya kalau datar, ya 2.
-        per_gpu_train_batch_size=12,
-        gradient_accumulation_steps=1,
+        per_gpu_train_batch_size=6,
+        gradient_accumulation_steps=2,
 
         add_vocab_file=str(label_map_path),
         label_smoothing=0.0,  # Always use this value
@@ -234,20 +238,21 @@ if __name__ == "__main__":
     try:
         main.main(args)
     finally:
-        hf_api.upload_folder(
-            folder_path=args.output_dir,
-            repo_id=REPO_ID,
-            path_in_repo=args.output_dir,
-        )
-        for path in [
-            label_map_path,
-            hierarchy_path,
-            _train_file_prep,
-            _test_file_prep,
-            _val_file_prep,
-        ]:
-            hf_api.upload_file(
-                path_or_fileobj=path,
-                path_in_repo=path.name,
+        if hf_api and REPO_ID:
+            hf_api.upload_folder(
+                folder_path=args.output_dir,
                 repo_id=REPO_ID,
+                path_in_repo=args.output_dir,
             )
+            for path in [
+                label_map_path,
+                hierarchy_path,
+                _train_file_prep,
+                _test_file_prep,
+                _val_file_prep,
+            ]:
+                hf_api.upload_file(
+                    path_or_fileobj=path,
+                    path_in_repo=path.name,
+                    repo_id=REPO_ID,
+                )
