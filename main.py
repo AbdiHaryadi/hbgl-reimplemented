@@ -9,7 +9,7 @@ import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments, parse_to_training_arguments
 from prepare import get_model_and_tokenizer
-from train import HBGLTrainer
+from train import HBGLTrainer, InterruptableHBGLTrainer
 from test_model import test as test_main
 from utils import TrainingExample, load_and_cache_examples
 
@@ -108,7 +108,10 @@ def set_hier_labels_in_model(model, hier_labels):
 
     model.hier_labels = [to_multi_hot(i) for i in hier_labels]
 
-def main(args: HBGLTrainingArguments | None = None):
+def main(
+        args: HBGLTrainingArguments | None = None,
+        interrupt_steps: int | None = None
+):
     if args is None:
         args = parse_to_training_arguments()
     prepare(args)
@@ -131,7 +134,10 @@ def main(args: HBGLTrainingArguments | None = None):
     )
     if args.add_vocab_file:
         assert_correct_target_id(old_vocab_size, training_features)
-    trainer = HBGLTrainer(args)
+    if interrupt_steps is None:
+        trainer = HBGLTrainer(args)
+    else:
+        trainer = InterruptableHBGLTrainer(args, interrupt_steps=interrupt_steps)
     best_macro_f1_path, best_micro_f1_path = trainer.train(training_features, model, tokenizer)
     if args.test_file:
         test(args, best_macro_f1_path, best_micro_f1_path)
