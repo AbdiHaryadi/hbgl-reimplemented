@@ -120,6 +120,13 @@ def main():
         return
 
     model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
+
+    # Extra log
+    print(next(model.parameters()).dtype)
+    print(torch.backends.cuda.matmul.allow_tf32)
+    print(torch.backends.cudnn.allow_tf32)
+    print(model.config._attn_implementation)
+
     training_features = load_and_cache_examples(
         example_file=args.train_file,
         tokenizer=tokenizer,
