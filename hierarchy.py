@@ -71,7 +71,7 @@ class LabelHierarchy:
         return cls(parent_childs_map)
 
     @classmethod
-    def from_path_list(cls, data: list[dict]):
+    def from_data_with_path_list_labels(cls, data: list[dict]):
         parent_childs_map: dict[str, list[str]] = {}
         for instance in data:
             labels = instance["labels"]

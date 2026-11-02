@@ -130,7 +130,7 @@ class PreprocessorConfigV2:
             return new_x
 
 def get_hierarchy_from_list(data):
-    return LabelHierarchy.from_path_list(data).parent_childs_map
+    return LabelHierarchy.from_data_with_path_list_labels(data).parent_childs_map
 
 LabelToIdType = dict[str, int]
 def make_label_to_id_map(data: list[dict]) -> LabelToIdType:
