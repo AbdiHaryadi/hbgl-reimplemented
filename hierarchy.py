@@ -70,6 +70,23 @@ class LabelHierarchy:
                     parent_childs_map[line[0]].append(token)
         return cls(parent_childs_map)
 
+    @classmethod
+    def from_path_list(cls, data: list[dict]):
+        parent_childs_map: dict[str, list[str]] = {}
+        for instance in data:
+            labels = instance["labels"]
+    
+            for label_list in labels:
+                current_parent = HIERARCHY_ROOT_NAME
+                for label in label_list:
+                    if current_parent not in parent_childs_map:
+                        parent_childs_map[current_parent] = []
+                    elif label not in parent_childs_map[current_parent]:
+                        parent_childs_map[current_parent].append(label)
+                    current_parent = label
+
+        return cls(parent_childs_map)
+
 class LabelMapper:
     def __init__(self, label_to_id_map: dict[str, int]):
         self.label_to_id_map = label_to_id_map

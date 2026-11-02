@@ -130,6 +130,7 @@ class PreprocessorConfigV2:
             return new_x
 
 def get_hierarchy_from_list(data):
+    # Duplicated in hierarchy.py
     label_hierarchy: dict[str, list[str]] = {}
     for instance in data:
         labels = instance["labels"]
