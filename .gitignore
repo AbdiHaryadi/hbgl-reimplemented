@@ -6,3 +6,4 @@ models/
 data/
 .cache/
 .env
+wandb/
