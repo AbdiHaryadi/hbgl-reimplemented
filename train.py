@@ -14,9 +14,9 @@ import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments
 from config import BertForSeq2SeqConfig
+import evaluation
 from hierarchy import LabelMapper
 from modeling import BertForSequenceToSequence, BertForSequenceToSequenceWithPseudoMask
-import test_model
 from utils import Seq2seqDatasetForBert, TrainingExample, batch_list_to_batch_tensors
 
 logger = logging.getLogger(__name__)
@@ -366,7 +366,7 @@ class HBGLTrainer:
         if self.args.valid_file is None:
             return None, None
     
-        out = test_model.test(HBGLTestingArguments(
+        out = evaluation.test(HBGLTestingArguments(
             tokenizer_name=self.args.model_name_or_path,
             input_file=self.args.valid_file,
             split="valid",
