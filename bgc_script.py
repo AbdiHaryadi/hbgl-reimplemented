@@ -100,6 +100,7 @@ def preprocess_procedure(
         input_test_jsonl_path: Path,
         input_val_jsonl_path: Path,
         input_hierarchy_path: Path,
+        hierarchical_setting: bool,
         output_train_jsonl_path: Path,
         output_test_jsonl_path: Path,
         output_val_jsonl_path: Path,
@@ -115,7 +116,6 @@ def preprocess_procedure(
         == set(val_df.columns)
     )
 
-    hierarchical_setting = True
     config = PreprocessorConfig(
         text_attribute="text",
         label_attribute_list=(
@@ -207,6 +207,7 @@ if __name__ == "__main__":
             input_test_jsonl_path=_test_file_l,
             input_val_jsonl_path=_val_file_l,
             input_hierarchy_path=data_root / "bgc_tax.txt",
+            hierarchical_setting=hierarchy_config_name == "hierarchical",
             output_train_jsonl_path=_train_file_prep,
             output_test_jsonl_path=_test_file_prep,
             output_val_jsonl_path=_val_file_prep,
