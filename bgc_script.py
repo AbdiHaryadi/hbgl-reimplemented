@@ -138,7 +138,7 @@ def preprocess_procedure(
 
     preprocessor.get_label_mapper().save(output_label_map_path)
 
-    parent_to_childs_map = {}
+    parent_to_childs_map: dict[str, list[str]] = {}
     with open(input_hierarchy_path) as fp:
         for i, line in enumerate(fp):
             parent, *childs = line.strip().split()
@@ -146,6 +146,15 @@ def preprocess_procedure(
                 assert parent == "root"
                 parent = HIERARCHY_ROOT_NAME
             parent_to_childs_map[parent] = childs
+
+    if not hierarchical_setting:
+        all_childs: list[str] = []
+        for parent, childs in parent_to_childs_map.items():
+            for child in childs:
+                if child not in all_childs:
+                    all_childs.append(child)
+        parent_to_childs_map = {HIERARCHY_ROOT_NAME: all_childs}
+
     LabelHierarchy(parent_to_childs_map).save(output_hierarchy_path)
 
 if __name__ == "__main__":
