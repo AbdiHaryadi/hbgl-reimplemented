@@ -234,7 +234,7 @@ if __name__ == "__main__":
         output_dir="models/bgc",
 
         max_source_seq_length=500,
-        max_target_seq_length=5 if hierarchy_config_name == "hierarchical" else 2,  # Depth maximum + 1, jadi harusnya kalau datar, ya 2.
+        max_target_seq_length=5, # Depth maximum + 1
         per_gpu_train_batch_size=6,
         gradient_accumulation_steps=2,
 
