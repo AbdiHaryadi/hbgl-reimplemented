@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import random
 import re
+import sys
 from typing import List, Union, Dict, Any
 
 from bs4 import BeautifulSoup
@@ -148,6 +149,12 @@ def preprocess_procedure(
     LabelHierarchy(parent_to_childs_map).save(output_hierarchy_path)
 
 if __name__ == "__main__":
+    if len(sys.argv) > 2:
+        raise ValueError("no i can't do this")
+
+    hierarchy_config_name = "hierarchical" if len(sys.argv) < 2 else sys.argv[1]
+    assert hierarchy_config_name in ["hierarchical", "flat"]
+
     # Need to run this:
     # wget https://fiona.uni-hamburg.de/ca89b3cf/blurbgenrecollectionen.zip -O data/blurbgenrecollectionen.zip
     # unzip data/blurbgenrecollectionen.zip -d data/bgc
@@ -217,7 +224,7 @@ if __name__ == "__main__":
         output_dir="models/bgc",
 
         max_source_seq_length=500,
-        max_target_seq_length=5,  # Depth maximum + 1, jadi harusnya kalau datar, ya 2.
+        max_target_seq_length=5 if hierarchy_config_name == "hierarchical" else 2,  # Depth maximum + 1, jadi harusnya kalau datar, ya 2.
         per_gpu_train_batch_size=6,
         gradient_accumulation_steps=2,
 
