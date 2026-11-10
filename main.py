@@ -9,7 +9,7 @@ import wandb
 
 from args import HBGLTestingArguments, HBGLTrainingArguments, parse_to_training_arguments
 from evaluation import test as test_main
-from prepare import get_model_and_tokenizer
+from prepare import get_model_and_tokenizer, get_tokenizer
 from train import HBGLTrainer, InterruptableHBGLTrainer
 from utils import TrainingExample, load_and_cache_examples
 
@@ -110,17 +110,25 @@ def set_hier_labels_in_model(model, hier_labels):
 
 def main(
         args: HBGLTrainingArguments | None = None,
-        interrupt_steps: int | None = None
+        interrupt_steps: int | None = None,
+        continue_train: bool = False,
 ):
     if args is None:
         args = parse_to_training_arguments()
     prepare(args)
     if args.only_test:
+        assert continue_train is False
         args.wandb = False
         test(args, args.only_test_path, None)
         return
 
-    model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
+    if continue_train:
+        tokenizer = get_tokenizer(args)
+        model = None
+        old_vocab_size = None
+    else:
+        model, tokenizer, old_vocab_size = get_model_and_tokenizer(args)
+    
     training_features = load_and_cache_examples(
         example_file=args.train_file,
         tokenizer=tokenizer,
@@ -132,7 +140,7 @@ def main(
         ) + "soft_label",
         shuffle=True,
     )
-    if args.add_vocab_file:
+    if args.add_vocab_file and old_vocab_size is not None:
         assert_correct_target_id(old_vocab_size, training_features)
     if interrupt_steps is None:
         trainer = HBGLTrainer(args)
