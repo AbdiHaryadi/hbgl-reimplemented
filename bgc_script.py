@@ -203,6 +203,7 @@ if __name__ == "__main__":
 
     label_map_path = data_root / "label_map.pkl"
     hierarchy_path = data_root / "bgc.taxonomy"
+    zangari_taxonomy_path = data_root / "bgc_tax.txt"
 
     if not all(os.path.exists(path) for path in [
         _train_file_prep,
@@ -215,7 +216,7 @@ if __name__ == "__main__":
             input_train_jsonl_path=_train_file_l,
             input_test_jsonl_path=_test_file_l,
             input_val_jsonl_path=_val_file_l,
-            input_hierarchy_path=data_root / "bgc_tax.txt",
+            input_hierarchy_path=zangari_taxonomy_path,
             hierarchical_setting=hierarchy_config_name == "hierarchical",
             output_train_jsonl_path=_train_file_prep,
             output_test_jsonl_path=_test_file_prep,
@@ -251,6 +252,8 @@ if __name__ == "__main__":
         label_cpt_not_incr_mask_ratio=True,
         label_cpt_steps=300,
         label_cpt_use_bce=True,
+
+        zangari_taxonomy_file=str(zangari_taxonomy_path),
     )
     try:
         main.main(args)

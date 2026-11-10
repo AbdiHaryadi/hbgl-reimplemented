@@ -1,3 +1,10 @@
+from pathlib import Path
+
+import numpy as np
+from sklearn.preprocessing import MultiLabelBinarizer
+
+from zangari_metrics import compute_metrics, compute_hierarchical_metrics
+
 def _precision_recall_f1(right, predict, total):
     """
     :param right: int, the count of right prediction
@@ -14,7 +21,7 @@ def _precision_recall_f1(right, predict, total):
         f = p * r * 2 / (p + r)
     return p, r, f
 
-def evaluate(epoch_predicts, epoch_labels, id2label):
+def evaluate(epoch_predicts, epoch_labels, id2label, tax_file: str | None = None):
     """
     :param epoch_predicts: List[List[int]], predicted list, label id (the previous one support probabilities, but it's unused right now)
     :param epoch_labels: List[List[int]], ground truth, label id
@@ -69,8 +76,36 @@ def evaluate(epoch_predicts, epoch_labels, id2label):
     recall_micro = float(right_total) / gold_total
     micro_f1 = 2 * precision_micro * recall_micro / (precision_micro + recall_micro) if (precision_micro + recall_micro) > 0 else 0.0
 
-    return {'precision': precision_micro,
+    original_result = {'precision': precision_micro,
             'recall': recall_micro,
             'micro_f1': micro_f1,
             'macro_f1': macro_f1,
             'full': [precision_dict, recall_dict, fscore_dict, right_count_list, predicted_count_list, gold_count_list]}
+
+    if tax_file is None:
+        return original_result
+
+    return original_result | zangari_evaluate(epoch_predicts, epoch_labels, id2label, tax_file)
+
+
+def zangari_evaluate(epoch_predicts, epoch_labels, id2label, tax_file):
+    # Transform labels into required format for hierarchical metrics (samples, labels)
+    multi_label_binarizer = MultiLabelBinarizer()
+    y_pred = [[id2label[label] for label in labels] for labels in epoch_predicts]
+    y_true = [[id2label[label] for label in labels] for labels in epoch_labels]
+    y_true_bin = multi_label_binarizer.fit_transform(y_true)
+    y_pred_bin = multi_label_binarizer.transform(y_pred)
+    assert isinstance(y_true_bin, np.ndarray)
+    assert isinstance(y_pred_bin, np.ndarray)
+
+    metrics = compute_metrics(y_true_bin, y_pred_bin, argmax_flag=False, threshold=-1)
+    if tax_file is not None:
+        h_metrics = compute_hierarchical_metrics(y_true_bin, y_pred_bin, encoder_dump_or_mapping=multi_label_binarizer,
+                                             taxonomy_path=Path(tax_file))
+    else:
+        h_metrics = {}
+
+    metrics = {f"{k}_zangari": v for k, v in metrics.items()}
+
+    extended_result = metrics | h_metrics
+    return extended_result

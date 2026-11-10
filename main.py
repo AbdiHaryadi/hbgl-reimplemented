@@ -88,6 +88,7 @@ def test(
             batch_size=128,
             cached_features_file=os.path.join(args.output_dir, "cached_features_for_test.pt"),
             add_vocab_file=args.add_vocab_file,
+            zangari_taxonomy_file=args.zangari_taxonomy_file,
         ))
         prefix = 'test' + 'micro' if i == 0 else 'macro'
         if args.wandb and out is not None:

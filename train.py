@@ -382,6 +382,7 @@ class HBGLTrainer:
                 "cached_features_for_valid.pt"
             ),
             add_vocab_file=self.args.add_vocab_file,
+            zangari_taxonomy_file=self.args.zangari_taxonomy_file,
         ))
 
         if out:

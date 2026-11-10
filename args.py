@@ -54,6 +54,8 @@ class HBGLTrainingArguments:
     only_test: bool = False
     only_test_path: str | None = None
 
+    zangari_taxonomy_file: str | None = None
+
     @property
     def n_gpu(self):
         if self.local_rank == -1 or self.no_cuda:
@@ -185,6 +187,8 @@ def parse_to_training_arguments(args=None):
     parser.add_argument('--only_test', action='store_true')
     parser.add_argument('--only_test_path', type=str, default=None)
 
+    parser.add_argument('--zangari_taxonomy_file', type=str, default=None)
+
     return HBGLTrainingArguments(**{
         k: v for k, v in vars(parser.parse_args(args=args)).items()
         if v is not None
@@ -211,6 +215,8 @@ class HBGLTestingArguments:
     max_tgt_length: int = 128
     cache_dir: str | None = None
     cached_features_file: str | None = None
+
+    zangari_taxonomy_file: str | None = None
 
 def parse_to_testing_arguments(args=None):
     # Removed:
@@ -263,6 +269,7 @@ def parse_to_testing_arguments(args=None):
     parser.add_argument("--cache_dir", default=None, type=str,
                         help="Where do you want to store the pre-trained models downloaded from s3")
     parser.add_argument("--cached_features_file", type=str, default=None)
+    parser.add_argument("--zangari_taxonomy_file", type=str, default=None)
 
     return HBGLTestingArguments(**{
         k: v for k, v in vars(parser.parse_args(args=args)).items()

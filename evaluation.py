@@ -89,6 +89,7 @@ def test_inner(args: HBGLTestingArguments, model_recover_path: str):
         epoch_predicts=predict_labels,
         epoch_labels=ground_labels,
         id2label=id2label,
+        tax_file=args.zangari_taxonomy_file,
     )
     return out
 
