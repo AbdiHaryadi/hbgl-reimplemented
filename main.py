@@ -85,7 +85,7 @@ def test(
             model_path=save_path,
             max_seq_length=args.max_source_seq_length,
             max_tgt_length=args.max_target_seq_length,
-            batch_size=128,
+            batch_size=args.per_gpu_train_batch_size,
             cached_features_file=os.path.join(args.output_dir, "cached_features_for_test.pt"),
             add_vocab_file=args.add_vocab_file,
             zangari_taxonomy_file=args.zangari_taxonomy_file,
