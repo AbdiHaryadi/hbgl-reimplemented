@@ -158,10 +158,18 @@ def preprocess_procedure(
     LabelHierarchy(parent_to_childs_map).save(output_hierarchy_path)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2:
+    sys_args = sys.argv.copy()
+    test_only_path: str | None = None
+    if sys_args[1] == "test":
+        print("Testing ...")
+        sys_args.pop(1)
+        test_only_path = sys_args.pop(1)
+        print("...", test_only_path, "...")
+
+    if len(sys_args) > 2:
         raise ValueError("no i can't do this")
 
-    hierarchy_config_name = "hierarchical" if len(sys.argv) < 2 else sys.argv[1]
+    hierarchy_config_name = "hierarchical" if len(sys_args) < 2 else sys_args[1]
     assert hierarchy_config_name in ["hierarchical", "flat"]
 
     # Need to run this:
@@ -252,6 +260,9 @@ if __name__ == "__main__":
         label_cpt_not_incr_mask_ratio=True,
         label_cpt_steps=300,
         label_cpt_use_bce=True,
+
+        only_test=test_only_path is not None,
+        only_test_path=test_only_path,
 
         zangari_taxonomy_file=str(zangari_taxonomy_path),
     )
