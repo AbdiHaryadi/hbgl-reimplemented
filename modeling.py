@@ -6,7 +6,6 @@ import math
 import torch
 from torch import nn
 from torch.nn import BCEWithLogitsLoss
-from torch.nn.modules.loss import _Loss
 import torch.nn.functional as F
 from transformers import BertPreTrainedModel
 from transformers.models.bert.modeling_bert import BertIntermediate, BertOnlyMLMHead, BertOutput, BertPooler, BertSelfOutput
@@ -427,50 +426,6 @@ class HBGLBertModel(BertPreTrainedForSeq2SeqModel):
         return extended_attention_mask
 
 
-class LabelSmoothingLoss(_Loss):
-    """
-    With label smoothing,
-    KL-divergence between q_{smoothed ground truth prob.}(w)
-    and p_{prob. computed by model}(w) is minimized.
-    """
-
-    def __init__(self, label_smoothing=0, tgt_vocab_size=0, ignore_index=0, size_average=None, reduce=None, reduction='mean'):
-        assert 0.0 < label_smoothing <= 1.0
-        self.ignore_index = ignore_index
-        super(LabelSmoothingLoss, self).__init__(
-            size_average=size_average, reduce=reduce, reduction=reduction)
-
-        assert label_smoothing > 0
-        assert tgt_vocab_size > 0
-
-        smoothing_value = label_smoothing / (tgt_vocab_size - 2)
-        one_hot = torch.full((tgt_vocab_size,), smoothing_value)
-        one_hot[self.ignore_index] = 0
-        self.register_buffer('one_hot', one_hot.unsqueeze(0))
-        self.confidence = 1.0 - label_smoothing
-        self.tgt_vocab_size = tgt_vocab_size
-
-    def forward(self, output, target):
-        """
-        output (FloatTensor): batch_size * num_pos * n_classes
-        target (LongTensor): batch_size * num_pos
-        """
-        assert self.tgt_vocab_size == output.size(2)
-        batch_size, num_pos = target.size(0), target.size(1)
-        output = output.view(-1, self.tgt_vocab_size)
-        target = target.view(-1)
-
-        model_prob = self.one_hot.float()
-        if not isinstance(model_prob, torch.Tensor):
-            raise ValueError("Expecting tensor in model_prob")
-
-        model_prob = model_prob.repeat(target.size(0), 1)
-        model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
-        model_prob.masked_fill_((target == self.ignore_index).unsqueeze(1), 0)
-
-        return F.kl_div(output, model_prob, reduction='none').view(batch_size, num_pos, -1).sum(2)
-
-
 def create_mask_and_position_ids(num_tokens: torch.Tensor, max_len: int, offset: torch.Tensor | None = None):
     base_position_matrix = torch.arange(
         0, max_len, dtype=num_tokens.dtype, device=num_tokens.device).view(1, -1)
@@ -502,14 +457,6 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
 
         self.source_type_id = config.source_type_id
         self.target_type_id = config.target_type_id
-
-        if config.label_smoothing > 0:
-            self.crit_mask_lm_smoothed = LabelSmoothingLoss(
-                config.label_smoothing, config.vocab_size, ignore_index=0, reduction='none')
-            self.crit_mask_lm = None
-        else:
-            self.crit_mask_lm_smoothed = None
-            self.crit_mask_lm = nn.CrossEntropyLoss(reduction='none')
 
         self.post_init()
 
