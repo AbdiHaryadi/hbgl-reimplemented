@@ -75,12 +75,9 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         # since it's not supported in HBGL.
         return self.mask_id
 
-    def get_num_target_tokens_by_target_ids(self, target_ids: torch.Tensor):
-        return target_ids.shape[0]
-
     def unnamed_method(self, target_ids: torch.Tensor):
         # target_ids is two dimensional
-        num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
+        num_target_tokens = target_ids.size(0)
 
         pseudo_ids = []
         label_ids = []
@@ -123,7 +120,7 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         target_ids = target_ids[:sep_token_id+1]
 
         num_source_tokens = len(source_ids)
-        num_target_tokens = self.get_num_target_tokens_by_target_ids(target_ids)
+        num_target_tokens = target_ids.size(0)
 
 
         if self.source_mask_prob > 0:
