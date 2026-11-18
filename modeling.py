@@ -538,9 +538,9 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             source_mask: torch.Tensor,
             target_mask: torch.Tensor,
             source_position_ids: torch.Tensor,
-            target_span_ids: torch.Tensor
+            target_position_ids: torch.Tensor
     ):
-        weight = torch.cat((torch.zeros_like(source_position_ids), target_span_ids, -target_span_ids), dim=1)
+        weight = torch.cat((torch.zeros_like(source_position_ids), target_position_ids, -target_position_ids), dim=1)
         from_weight = weight.unsqueeze(-1)
         to_weight = weight.unsqueeze(1)
 
@@ -559,9 +559,15 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             pseudo_ids: torch.Tensor, 
             num_source_tokens: torch.Tensor,
             num_target_tokens: torch.Tensor,
-            target_span_ids: torch.Tensor | None = None,
-            target_no_offset=None
     ):
+        """
+        source_ids: input_ids for the source
+        target_ids: input_ids for the target
+        label_ids: same as target_ids (I wonder why it doesn't same, maybe because previously target_ids can be masked randomly)
+        pseudo_ids: target_ids, but each non-pad ID is replaced with mask
+        num_source_tokens: num of source token IDs (obvious) -> Notice that this is batched, so different lengths are possible
+        num_target_tokens: num of target token IDs (obvious)
+        """
         source_len = source_ids.size(1)
         target_len = target_ids.size(1)
         pseudo_len = pseudo_ids.size(1)
@@ -572,15 +578,12 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             create_mask_and_position_ids(num_source_tokens, source_len)
         target_mask, target_position_ids = \
             create_mask_and_position_ids(
-                num_target_tokens, target_len, offset=None if target_no_offset else num_source_tokens)
-
-        if target_span_ids is None:
-            target_span_ids = target_position_ids
+                num_target_tokens, target_len, offset=num_source_tokens)
 
         outputs: torch.Tensor = self.bert(
             None,
             inputs_embeds=self.create_input_embeds(source_ids, target_ids, pseudo_ids),
-            attention_mask=self.create_attention_mask(source_mask, target_mask, source_position_ids, target_span_ids),
+            attention_mask=self.create_attention_mask(source_mask, target_mask, source_position_ids, target_position_ids),
             token_type_ids=self.create_token_type_ids(source_ids, pseudo_ids),
             position_ids=torch.cat((source_position_ids, target_position_ids, target_position_ids), dim=1),
             split_lengths=(source_len, target_len, pseudo_len))
