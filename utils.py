@@ -76,7 +76,7 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         return self.mask_id
 
     def unnamed_method(self, target_ids: torch.Tensor):
-        # target_ids is two dimensional
+        # target_ids is two dimensional because it's multi-hot encoding (?)
         num_target_tokens = target_ids.size(0)
 
         pseudo_ids = []
@@ -108,16 +108,17 @@ class Seq2seqDatasetForBert(torch.utils.data.Dataset):
         # print("%d get %d" % (_idx, idx))
         feature = self.features[idx]
         source_ids = self.__trunk([self.cls_id] + feature.source_ids, self.max_source_len)
-        target_ids = feature.target_ids
-        sep_token_id = sum([len(i) > 0  for i in target_ids])
+
+        # Assume that if we found zero list, the next element would be zero list.
+        target_depth = sum([len(i) > 0  for i in feature.target_ids])
 
         target_ids = torch.zeros(len(feature.target_ids) + 1, self.vocab_size)
         for i, ti in enumerate(feature.target_ids):
-            for j, tij in enumerate(ti):
+            for tij in ti:
                 target_ids[i][tij] = 1
 
-        target_ids[sep_token_id, self.sep_id] = 1
-        target_ids = target_ids[:sep_token_id+1]
+        target_ids[target_depth, self.sep_id] = 1
+        target_ids = target_ids[:target_depth+1]
 
         num_source_tokens = len(source_ids)
         num_target_tokens = target_ids.size(0)
