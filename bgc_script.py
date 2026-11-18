@@ -26,7 +26,7 @@ def get_tag_from_soup_or_raise(soup: BeautifulSoup, name: str):
         raise ValueError(f"{name} is not found")
     return el
 
-def parse_books(file_path: Union[Path, str]) -> List[Dict[str, Any]]:
+def parse_books(file_path: Union[Path, str], seed: int | None = 120) -> List[Dict[str, Any]]:
     """
     Parse a "book" DOM file extracted from the TXT splits.
 
@@ -60,7 +60,7 @@ def parse_books(file_path: Union[Path, str]) -> List[Dict[str, Any]]:
         else:
             logging.warning("Skipping: no summary or category.")
 
-    random.shuffle(data)
+    random.Random(seed).shuffle(data)
     return data
 
 
@@ -69,12 +69,12 @@ def write_bgc_jsonl(filepath: Path, data: List):
         for s in data:
             out_f.write(f"{json.dumps(s)}\n")
 
-def parse_and_write(input_filepath: Path, output_filepath: Path):
+def parse_and_write(input_filepath: Path, output_filepath: Path, seed: int | None = 120):
     if os.path.exists(output_filepath):
         print(f"Skip processing {input_filepath} because {output_filepath} already exists.")
         return
     
-    data = parse_books(input_filepath)
+    data = parse_books(input_filepath, seed=seed)
     data = [{k: v for k, v in d.items() if k not in ["labels", "flat_label"]} for d in data]
     write_bgc_jsonl(output_filepath, data)
 
@@ -205,9 +205,10 @@ if __name__ == "__main__":
     _test_file_prep = data_root / "test_preprocessed.jsonl"
     _val_file_prep = data_root / "val_preprocessed.jsonl"
 
-    parse_and_write(_train_file, _train_file_l)
-    parse_and_write(_test_file, _test_file_l)
-    parse_and_write(_val_file, _val_file_l)
+    seed = 120
+    parse_and_write(_train_file, _train_file_l, seed=seed)
+    parse_and_write(_test_file, _test_file_l, seed=seed)
+    parse_and_write(_val_file, _val_file_l, seed=seed)
 
     label_map_path = data_root / "label_map.pkl"
     hierarchy_path = data_root / "bgc.taxonomy"
