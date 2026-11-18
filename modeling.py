@@ -530,7 +530,6 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
         assert self.cls.predictions.decoder.bias is self.cls.predictions.bias
 
 class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
-    label_start_index = -1
     MODEL_NAME = "BertForSequenceToSequenceWithPseudoMask"
 
     @staticmethod
@@ -590,12 +589,8 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
 
         sequence_output = outputs[0]
         pseudo_sequence_output = sequence_output[:, source_len + target_len:, ]
-
-        label_ids, prediction_scores_masked = self.get_new_label_ids_and_prediction_scores_masked(
-            label_ids,
-            pseudo_sequence_output
-        )
-        pseudo_lm_loss = self.calculate_pseudo_lm_loss(label_ids, pseudo_ids, target_mask, prediction_scores_masked)
+        prediction_scores_masked = self.cls(pseudo_sequence_output)
+        pseudo_lm_loss = self.calculate_pseudo_lm_loss(label_ids, pseudo_ids, prediction_scores_masked)
 
         return pseudo_lm_loss
 
@@ -612,65 +607,20 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
         input_embeds = torch.cat((source_ids_embeds, target_ids_embeds, pseudo_ids_embeds), dim=1)
         return input_embeds
 
-    def get_new_label_ids_and_prediction_scores_masked(self, label_ids: torch.Tensor, pseudo_sequence_output: torch.Tensor):
-        if self.label_start_index > 0:
-            lsi = self.label_start_index
-            new_label_ids = label_ids - lsi
-            new_label_ids += 1
-
-            sep_tokens = list(set(label_ids[new_label_ids < 0].cpu().tolist()))
-            assert len(sep_tokens) == 1
-            sep_token = sep_tokens[0]
-
-            new_label_ids[new_label_ids < 0] = 0 # sep token
-            prediction_scores_masked = self.cls(pseudo_sequence_output)
-            prediction_scores_masked = torch.cat([prediction_scores_masked[:, :, sep_token].unsqueeze(-1),
-                                                  prediction_scores_masked[:, :, lsi:]], dim=-1)
-
-            label_ids = new_label_ids
-            # print(prediction_scores_masked, label_ids)
-        else:
-            prediction_scores_masked: torch.Tensor = self.cls(pseudo_sequence_output)
-        return label_ids,prediction_scores_masked
-
     def calculate_pseudo_lm_loss(
             self,
             label_ids: torch.Tensor,
             pseudo_ids: torch.Tensor,
-            target_mask: torch.Tensor,
             prediction_scores_masked: torch.Tensor
-    ):
-        if isinstance(self.sep_token_id, int):
-            loss_fct = BCEWithLogitsLoss()
-            mask_token_mask = pseudo_ids == self.mask_token_id
-            prediction_scores_masked = prediction_scores_masked[mask_token_mask]
-            label_ids = label_ids[mask_token_mask]
+    ):        
+        loss_fct = BCEWithLogitsLoss()
+        mask_token_mask = pseudo_ids == self.mask_token_id
+        label_ids = self.filter_for_pseudo_lm_loss(label_ids, mask_token_mask)
+        prediction_scores_masked = self.filter_for_pseudo_lm_loss(prediction_scores_masked, mask_token_mask)
+        return loss_fct(prediction_scores_masked, label_ids)
 
-            # label_ids[label_ids != self.sep_token_id] += 1
-
-            prediction_scores_masked = torch.cat([prediction_scores_masked[:, self.sep_token_id].unsqueeze(-1),
-                                                prediction_scores_masked[:, self.text_vocab_size:]], dim=-1)
-            label_ids = torch.cat([label_ids[:, self.sep_token_id].unsqueeze(-1),
-                                label_ids[:, self.text_vocab_size:]], dim=-1)
-            pseudo_lm_loss = loss_fct(prediction_scores_masked, label_ids)
-
-            # masked_lm_loss = loss_fct(prediction_scores_masked[mask_token_mask], label_ids[mask_token_mask])
-        elif self.crit_mask_lm_smoothed:
-            masked_lm_loss: torch.Tensor = self.crit_mask_lm_smoothed(
-                F.log_softmax(prediction_scores_masked.float(), dim=-1), label_ids)
-            pseudo_lm_loss = loss_mask_and_normalize(
-                masked_lm_loss.float(), target_mask)
-        elif self.crit_mask_lm:
-            masked_lm_loss: torch.Tensor = self.crit_mask_lm(
-                prediction_scores_masked.transpose(1, 2).float(), label_ids)
-            pseudo_lm_loss = loss_mask_and_normalize(
-                masked_lm_loss.float(), target_mask)
-        else:
-            raise NotImplementedError("No loss implemented")
-        return pseudo_lm_loss
-
-def loss_mask_and_normalize(loss: torch.Tensor, target_mask: torch.Tensor):
-    target_mask = target_mask.type_as(loss)
-    loss = loss * target_mask
-    denominator = torch.sum(target_mask) + 1e-5
-    return (loss / denominator).sum()
+    def filter_for_pseudo_lm_loss(self, x: torch.Tensor, mask: torch.Tensor):
+        x = x[mask]
+        x = torch.cat([x[:, self.sep_token_id].unsqueeze(-1),
+                            x[:, self.text_vocab_size:]], dim=-1)
+        return x
