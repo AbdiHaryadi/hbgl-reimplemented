@@ -264,7 +264,6 @@ class HBGLTrainer:
             for step, batch in enumerate(train_iterator):
                 if self.get_current_global_step() > self.args.num_training_steps:
                     break
-                batch = tuple(t.to(self.args.device) for t in batch)
                 (
                     source_ids,
                     target_ids,
