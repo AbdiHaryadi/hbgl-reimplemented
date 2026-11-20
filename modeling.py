@@ -530,6 +530,7 @@ class BertForSequenceToSequenceWithPseudoMask(BertForSequenceToSequence):
             None,
             inputs_embeds=self.create_input_embeds(source_ids, target_ids, pseudo_ids),
             attention_mask=self.create_attention_mask(source_mask, target_mask, source_position_ids, target_position_ids),
+            # I wonder why we don't use target_ids for create_token_type_ids instead of pseudo_ids. Should be equivalent.
             token_type_ids=self.create_token_type_ids(source_ids, pseudo_ids),
             position_ids=torch.cat((source_position_ids, target_position_ids, target_position_ids), dim=1),
             split_lengths=(source_len, target_len, pseudo_len))
