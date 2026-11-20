@@ -57,7 +57,6 @@ class HBGLPipeline:
         max_src_length = args.max_seq_length - 2 - args.max_tgt_length
 
         tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, save_path)
-        torch.cuda.empty_cache()
         model.eval()
 
         self.tokenizer = tokenizer
@@ -70,17 +69,23 @@ class HBGLPipeline:
                          for label in label_mapper.get_all_labels()}
 
     def __call__(self, text: str):
-        buf = self.make_single_element_buf(text)
+        # Magic code probably to clear cache
         with torch.no_grad():
-            # I don't care with Jiang result. I believe with the score.
-            buf_to_traces(self.bi_uni_pipeline, self.model, buf)
+            torch.cuda.empty_cache()
 
-            current_batch_scores = to_base_model(self.model).get_last_score_list()
-            assert current_batch_scores is not None
-            current_batch_predictions: list[torch.Tensor] = [
-                (scores > 0).float().detach().cpu()
-                for scores in current_batch_scores
-            ]
+        tokens = self.tokenizer.tokenize(text.strip().lower())[:self.max_src_length]
+        tokens = [str(x) for x in tokens]
+        buf = [tokens]
+        # I don't care with Jiang result. I believe with the score.
+        buf_to_traces(self.bi_uni_pipeline, self.model, buf)
+
+        current_batch_scores = to_base_model(self.model).get_last_score_list()
+        assert current_batch_scores is not None
+
+        current_batch_predictions: list[torch.Tensor] = [
+            (scores > 0).float().detach().cpu()
+            for scores in current_batch_scores
+        ]
         
         single_prediction_result = [predictions_per_level[0] for predictions_per_level in current_batch_predictions]
         named_traces = [[self.id2label[i - 1] if i > 0 else "[SEP]" for i in range(len(x[0])) if x[0, i] == 1] for x in single_prediction_result]
@@ -94,10 +99,30 @@ class HBGLPipeline:
                 if label not in result and label != "[SEP]":
                     result.append(label)
 
-        return result, named_traces
+        # Do AGrad here
+        # Should be combined with above, but I split it for easiness
+        current_batch_attention_probs_list = to_base_model(self.model).get_last_attention_probs_list()
+        assert current_batch_attention_probs_list is not None
+            
+        for attention_probs in current_batch_attention_probs_list:
+            attention_probs.retain_grad()
+        
+        loss_fct = torch.nn.BCEWithLogitsLoss()
+        total_loss = torch.tensor(0.0, device=get_device())
+        for scores in current_batch_scores:
+            self_target = (scores > 0).float()
+            total_loss += loss_fct(scores, self_target)
 
-    def make_single_element_buf(self, text: str):
-        return [self.tokenizer.tokenize(text.strip().lower())[:self.max_src_length]]
+        total_loss.backward()
+
+        current_batch_agrads: list[torch.Tensor] = []
+        for attention_probs in current_batch_attention_probs_list:
+            assert attention_probs.grad is not None
+            ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).sum(dim=1)
+            current_batch_agrads.append(ca.detach().cpu())
+
+        agrad_result = [agrads_per_level[0] for agrads_per_level in current_batch_agrads]
+        return result, named_traces, tokens, agrad_result
 
 def prepare_for_get_outputs(args: HBGLPipelineArguments, model_recover_path: str):
     if args.max_tgt_length >= args.max_seq_length - 2:
