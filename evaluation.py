@@ -257,6 +257,10 @@ def get_agrad(
             prediction_result[buf_id[i]] = [predictions_per_level[i] for predictions_per_level in current_batch_predictions]
             tokens[buf_id[i]] = buf[i]
 
+        # Magic code probably to clear cache
+        with torch.no_grad():
+            torch.cuda.empty_cache()
+
     return agrads_result, prediction_result, tokens
 
 def buf_to_agrads(
@@ -281,16 +285,16 @@ def buf_to_agrads(
     self_target_list: list[torch.Tensor] = []
     for scores in current_batch_scores:
         self_target = (scores > 0).float()
-        self_target_list.append(self_target.cpu())
+        self_target_list.append(self_target.detach().cpu())
         total_loss += loss_fct(scores, self_target)
         
-    total_loss.backward(retain_graph=False)
+    total_loss.backward()
 
     current_batch_agrads: list[torch.Tensor] = []
     for attention_probs in current_batch_attention_probs_list:
         assert attention_probs.grad is not None
         ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).sum(dim=1)
-        current_batch_agrads.append(ca.cpu())
+        current_batch_agrads.append(ca.detach().cpu())
 
     return current_batch_agrads, self_target_list
 
