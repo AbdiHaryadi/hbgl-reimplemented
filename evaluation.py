@@ -263,7 +263,7 @@ def buf_to_agrads(
     bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
     model: BertForSeq2SeqDecoder | torch.nn.DataParallel[BertForSeq2SeqDecoder],
     buf: list[list[str]],
-):
+):  
     # I don't care about the output.
     buf_to_traces(bi_uni_pipeline, model, buf)
 
@@ -277,11 +277,11 @@ def buf_to_agrads(
 
     loss_fct = torch.nn.BCEWithLogitsLoss()
 
-    total_loss = torch.tensor(0.0)
+    total_loss = torch.tensor(0.0, device=get_device())
     self_target_list: list[torch.Tensor] = []
     for scores in current_batch_scores:
         self_target = (scores > 0).float()
-        self_target_list.append(self_target)
+        self_target_list.append(self_target.cpu())
         total_loss += loss_fct(scores, self_target)
         
     total_loss.backward()
@@ -290,7 +290,7 @@ def buf_to_agrads(
     for attention_probs in current_batch_attention_probs_list:
         assert attention_probs.grad is not None
         ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).sum(dim=1)
-        current_batch_agrads.append(ca)
+        current_batch_agrads.append(ca.cpu())
 
     return current_batch_agrads, self_target_list
 
