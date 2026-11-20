@@ -116,6 +116,10 @@ def test_inner_for_get_scores(args: HBGLTestingArguments, model_path: str):
 
     return outputs, ground_labels
 
+def test_inner_for_get_agrads(args: HBGLTestingArguments, model_path: str):
+    tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, model_path)
+    return get_agrad(args, tokenizer, bi_uni_pipeline, model)
+
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -238,6 +242,7 @@ def get_agrad(
     input_lines_with_indices = get_input_lines_with_indices(args, tokenizer)
     agrads_result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
     prediction_result: list[list[torch.Tensor] | None] = [None for _ in input_lines_with_indices]
+    tokens: list[list[str] | None] = [None for _ in input_lines_with_indices]
 
     for _chunk in iter_chunk(input_lines_with_indices, batch_size=args.batch_size):
         buf_id = [x[0] for x in _chunk]
@@ -250,8 +255,9 @@ def get_agrad(
         for i in range(len(buf)):
             agrads_result[buf_id[i]] = [agrads_per_level[i] for agrads_per_level in current_batch_agrads]
             prediction_result[buf_id[i]] = [predictions_per_level[i] for predictions_per_level in current_batch_predictions]
+            tokens[buf_id[i]] = buf[buf_id[i]]
 
-    return agrads_result, prediction_result
+    return agrads_result, prediction_result, tokens
 
 def buf_to_agrads(
     bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
