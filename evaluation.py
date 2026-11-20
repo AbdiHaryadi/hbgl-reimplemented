@@ -257,6 +257,8 @@ def get_agrad(
             prediction_result[buf_id[i]] = [predictions_per_level[i] for predictions_per_level in current_batch_predictions]
             tokens[buf_id[i]] = buf[i]
 
+        torch.cuda.empty_cache()
+
     return agrads_result, prediction_result, tokens
 
 def buf_to_agrads(
