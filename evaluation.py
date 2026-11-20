@@ -255,7 +255,7 @@ def get_agrad(
         for i in range(len(buf)):
             agrads_result[buf_id[i]] = [agrads_per_level[i] for agrads_per_level in current_batch_agrads]
             prediction_result[buf_id[i]] = [predictions_per_level[i] for predictions_per_level in current_batch_predictions]
-            tokens[buf_id[i]] = buf[buf_id[i]]
+            tokens[buf_id[i]] = buf[i]
 
     return agrads_result, prediction_result, tokens
 
