@@ -1,9 +1,29 @@
-import numpy as np
-import pandas as pd
-import gradio as gr
 import time
 
-def show(text: str):
+import gradio as gr
+import numpy as np
+import pandas as pd
+
+from pipeline import HBGLPipeline
+
+pipeline = HBGLPipeline()
+
+def list_to_set_text(x: list[str]):
+    if len(x) > 0:
+        return "{" + ", ".join(x) + "}"
+    else:
+        return "∅"
+
+def predict(text: str):
+    result, named_traces = pipeline(text)
+    result_text = list_to_set_text(result)
+    named_traces_text = "\n".join([
+        f"Tingkat {level_index + 1}: " + list_to_set_text(trace)
+        for level_index, trace in enumerate(named_traces)
+    ])
+    return result_text + "\n\n" + named_traces_text
+
+def explain(text: str):
     if text.strip() == "":
         return [], pd.DataFrame({
             "token": [],
@@ -40,12 +60,15 @@ with gr.Blocks() as demo:
             predict_button = gr.Button("Prediksi")
 
         with gr.Column():
+            prediction_result = gr.Textbox(label="Hasil Prediksi")
             highlighted_text = gr.HighlightedText(label="AGrad (sorotan)", value=[])
             dataframe = gr.DataFrame(label="AGrad (rincian)", value=pd.DataFrame(columns=["token", "agrad"]))
     
     gr.on(
         triggers=[text.submit, predict_button.click],
-        fn=show, inputs=text, outputs=[highlighted_text, dataframe]
-    ).then()
+        fn=predict, inputs=text, outputs=prediction_result
+    ).then(
+        fn=explain, inputs=text, outputs=[highlighted_text, dataframe]
+    )
 
 demo.launch()

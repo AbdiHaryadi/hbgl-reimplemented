@@ -300,3 +300,32 @@ def load_and_cache_examples_fast(
 
 def id_to_label_token(id_: int):
     return f"[A_{id_}]"
+
+def tokenizer_vocab_words(tokenizer: BertTokenizer):
+    max_id = max(tokenizer.vocab.values())
+    vocab_words = [f"[unused{id}]" for id in range(max_id + 1)]
+    for token, id in tokenizer.vocab.items():
+        vocab_words[id] = token
+    return vocab_words
+
+def detokenize(tk_list: list[str]):
+    r_list: list[str] = []
+    for tk in tk_list:
+        if tk.startswith('##') and len(r_list) > 0:
+            r_list[-1] = r_list[-1] + tk[2:]
+        else:
+            r_list.append(tk)
+    return r_list
+
+def convert_w_ids_to_output_sequence(tokenizer: BertTokenizer, w_ids: list[int]):
+    output_buf = tokenizer.convert_ids_to_tokens(w_ids)
+    assert isinstance(output_buf, list)
+    output_tokens: list[str] = []
+    for t in output_buf:
+        if t in (tokenizer.sep_token, tokenizer.pad_token):
+            break
+        output_tokens.append(t)
+    output_sequence = ' '.join(detokenize(output_tokens))
+    if '\n' in output_sequence:
+        output_sequence = " [X_SEP] ".join(output_sequence.split('\n'))
+    return output_sequence
