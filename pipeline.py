@@ -118,8 +118,6 @@ class HBGLPipeline:
         return result
 
     def get_agrads(self, batch_scores_per_level: list[torch.Tensor]):
-        # Do AGrad here
-        # Should be combined with above, but I split it for easiness
         current_batch_attention_probs_list = to_base_model(self.model).get_last_attention_probs_list()
         assert current_batch_attention_probs_list is not None
             
