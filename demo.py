@@ -16,15 +16,6 @@ def list_to_set_text(x: list[str]):
 
 def predict(text: str):
     result, named_traces, tokens, agrads_result = pipeline(text)
-    result_text = list_to_set_text(result)
-    named_traces_text = "\n".join([
-        f"Tingkat {level_index + 1}: " + list_to_set_text(trace)
-        for level_index, trace in enumerate(named_traces)
-    ])
-    return result_text + "\n\n" + named_traces_text, tokens, [x.tolist() for x in agrads_result]
-
-def new_predict(text: str):
-    result, named_traces, tokens, agrads_result = pipeline(text)
     return format_for_summary(result, named_traces), named_traces, tokens, agrads_result
 
 def format_for_summary(result: list[str], named_traces: list[list[str]]):
@@ -37,15 +28,19 @@ def format_for_summary(result: list[str], named_traces: list[list[str]]):
 
 def visualize_agrad(tokens: list[str], agrads_result: list[list[float]], level: int):
     level_index = level - 1
-    agrads = np.array(agrads_result[level_index][1:1+len(tokens)])
-    abs_std = np.abs(agrads).std()
+    abs_std = np.abs([y for x in agrads_result for y in x]).std()
     if abs_std != 0:
-        scores = np.tanh(agrads / abs_std)
+        scores = np.tanh(np.array(agrads_result[level_index]) / abs_std)
     else:
-        scores = np.tanh(agrads)
+        scores = np.tanh(np.array(agrads_result[level_index]))
 
     try:
-        highlighted_text_output = [(t, float(a)) for t, a in zip(tokens, scores, strict=True)]
+        highlighted_text_output = (
+            [("[CLS]", float(scores[0]))]
+            + [(t, float(a)) for t, a in zip(tokens, scores[1:1+len(tokens)], strict=True)]
+            + [("[SEP]", float(scores[1+len(tokens)]))]
+            + [(f"[u{prev_level_index + 1}]", scores[2+len(tokens)+prev_level_index]) for prev_level_index in range(level_index)]
+        )
     except ValueError:
         raise gr.Error("Cannot zip tokens and scores, possibly because of unequal length. .-.")
 
@@ -71,22 +66,28 @@ with gr.Blocks() as demo:
             predict_button = gr.Button("Prediksi")
 
         with gr.Column():
-            prediction_result = gr.Textbox(label="Hasil Prediksi Keseluruhan", value=format_for_summary([], [[] for _ in range(5)]))
-            level_slider = gr.Slider(
-                minimum=1, maximum=5, step=1, value=1, label="Tingkat"
+            prediction_result = gr.Textbox(
+                label="Hasil Prediksi Keseluruhan",
+                value=format_for_summary([], [[] for _ in range(pipeline.max_tgt_length)])
             )
-            level_prediction_result = gr.Textbox(label="Hasil Prediksi Spesifik Tingkat", value=list_to_set_text([]))
-            highlighted_text = gr.HighlightedText(label="AGrad (sorotan)", value=[])
-            dataframe = gr.DataFrame(label="AGrad (rincian)", value=pd.DataFrame(columns=["token"] + [
-                f"agrad_{level_index + 1}" for level_index in range(5)
-            ]))
 
-    named_traces = gr.State([[] for _ in range(5)])
+    with gr.Row():
+        level_slider = gr.Slider(
+            minimum=1, maximum=5, step=1, value=1, label="Tingkat"
+        )
+        level_prediction_result = gr.Textbox(label="Hasil Prediksi Spesifik Tingkat", value=list_to_set_text([]))
+
+    highlighted_text = gr.HighlightedText(label="AGrad (sorotan)", value=[])
+    dataframe = gr.DataFrame(label="AGrad (rincian)", value=pd.DataFrame(columns=["token"] + [
+        f"agrad_{level_index + 1}" for level_index in range(pipeline.max_tgt_length)
+    ]))
+
+    named_traces = gr.State([[] for _ in range(pipeline.max_tgt_length)])
     tokens = gr.State([])
-    agrads_result = gr.State([[] for _ in range(5)])
+    agrads_result = gr.State([[] for _ in range(pipeline.max_tgt_length)])
     gr.on(
         triggers=[text.submit, predict_button.click],
-        fn=new_predict, inputs=text, outputs=[prediction_result, named_traces, tokens, agrads_result]
+        fn=predict, inputs=text, outputs=[prediction_result, named_traces, tokens, agrads_result]
     )
     gr.on(
         triggers=[tokens.change, agrads_result.change, level_slider.change],

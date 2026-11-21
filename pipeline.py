@@ -68,6 +68,8 @@ class HBGLPipeline:
         self.id2label = {label_mapper.label_to_id(label): label
                          for label in label_mapper.get_all_labels()}
 
+        self.max_tgt_length = args.max_tgt_length
+
     def __call__(self, text: str):
         # Magic code probably to clear cache
         with torch.no_grad():
