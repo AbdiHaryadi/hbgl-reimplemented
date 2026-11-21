@@ -10,7 +10,7 @@ from evaluation import buf_to_traces, get_device, to_base_model
 from hierarchy import LabelMapper
 from modeling_decoding import BertForSeq2SeqDecoder
 import seq2seq_loader
-from utils import convert_w_ids_to_output_sequence, tokenizer_vocab_words
+from utils import tokenizer_vocab_words
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
