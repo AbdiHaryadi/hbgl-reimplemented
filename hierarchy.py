@@ -10,7 +10,6 @@ class LabelHierarchy:
     def __init__(
             self,
             parent_childs_map: dict[str, list[str]],
-            # label_to_id_map: dict[str, int],
     ):
         self.parent_childs_map = parent_childs_map
         self.child_parent_map: dict[str, str] = {}
@@ -45,15 +44,6 @@ class LabelHierarchy:
         for token in self.iter_unique_child_names():
             _label_index_map[token] = len(_label_index_map)
         return _label_index_map
-
-    # def get_label_id(self, label_name: str):
-    #     return self.label_to_id_map[label_name] if label_name != ROOT_NAME else -1
-
-    def get_one_by_one_label_init_map(self):
-        return {
-            label: '/'.join(self.find_path(label))
-            for label in self.iter_unique_child_names()
-        }
 
     def save(self, path):
         with open(path, 'w') as f:
