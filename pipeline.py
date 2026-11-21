@@ -95,14 +95,21 @@ class HBGLPipeline:
         self.max_tgt_length = args.max_tgt_length
         self.hierarchy = LabelHierarchy.load(args.hierarchy_path)
 
-    def __call__(self, text: str):
+    def __call__(self, text: str, compute_agrad: bool = True):
         # Magic code probably to clear cache
         with torch.no_grad():
             torch.cuda.empty_cache()
 
         tokens = self.tokenize(text)
-        batch_logits_per_level = self.get_batch_logits_per_level(tokens)
-        agrads, agrads_loss = self.get_agrads(batch_logits_per_level)
+
+        if compute_agrad:
+            batch_logits_per_level = self.get_batch_logits_per_level(tokens)
+            agrads, agrads_loss = self.get_agrads(batch_logits_per_level)
+        else:
+            with torch.no_grad():
+                batch_logits_per_level = self.get_batch_logits_per_level(tokens)
+            agrads = []
+            agrads_loss = -1.0
 
         return HBGLPipelineOutput(
             tokens=tokens,
