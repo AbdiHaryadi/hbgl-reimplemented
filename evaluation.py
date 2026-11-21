@@ -89,19 +89,19 @@ def get_ground_flattened_labels(input_file: str) -> list[list[int]]:
         ground_labels = [list(set(sum(json.loads(i)["tgt"], []))) for i in f]
     return ground_labels
 
-def test_inner_for_get_scores(args: HBGLTestingArguments, model_path: str):
+def test_inner_for_get_logits(args: HBGLTestingArguments, model_path: str):
     tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, model_path)
-    scores = get_scores(args, tokenizer, bi_uni_pipeline, model)
+    logits = get_logits(args, tokenizer, bi_uni_pipeline, model)
     ground_labels = get_ground_flattened_labels(args.input_file)
     outputs: list[list[float] | None] = []
-    for current_scores, current_ground_labels in zip(scores, ground_labels):
-        if current_scores is None:
+    for current_logits, current_ground_labels in zip(logits, ground_labels):
+        if current_logits is None:
             outputs.append(None)
             continue
 
-        # current_scores selalu dimensinya [1, label_vocab_size + 1], dengan indeks 0 adalah EOS.
+        # current_logits selalu dimensinya [1, label_vocab_size + 1], dengan indeks 0 adalah EOS.
         outputs.append([
-            max([score_per_level[0, label_id + 1].item() for score_per_level in current_scores])
+            max([logit_per_level[0, label_id + 1].item() for logit_per_level in current_logits])
             for label_id in current_ground_labels
         ])
 
@@ -197,7 +197,7 @@ def get_outputs(
         first_batch = False
     return output_lines
 
-def get_scores(
+def get_logits(
         args: HBGLTestingArguments,
         tokenizer: BertTokenizer,
         bi_uni_pipeline: list[seq2seq_loader.Preprocess4Seq2seqDecoder],
@@ -215,10 +215,10 @@ def get_scores(
             # I don't care about the output.
             buf_to_traces(bi_uni_pipeline, model, buf)
 
-        current_batch_scores = to_base_model(model).get_last_score_list()
-        if current_batch_scores is not None:
+        current_batch_logits = to_base_model(model).get_last_logit_list()
+        if current_batch_logits is not None:
             for i in range(len(buf)):
-                result[buf_id[i]] = [scores_per_level[i] for scores_per_level in current_batch_scores]
+                result[buf_id[i]] = [logits_per_level[i] for logits_per_level in current_batch_logits]
 
     return result
 
@@ -262,9 +262,9 @@ def buf_to_agrads(
     # I don't care about the output.
     buf_to_traces(bi_uni_pipeline, model, buf)
 
-    current_batch_scores = to_base_model(model).get_last_score_list()
+    current_batch_logits = to_base_model(model).get_last_logit_list()
     current_batch_attention_probs_list = to_base_model(model).get_last_attention_probs_list()
-    if current_batch_scores is None or current_batch_attention_probs_list is None:
+    if current_batch_logits is None or current_batch_attention_probs_list is None:
         return None
         
     for attention_probs in current_batch_attention_probs_list:
@@ -274,10 +274,10 @@ def buf_to_agrads(
 
     total_loss = torch.tensor(0.0, device=get_device())
     self_target_list: list[torch.Tensor] = []
-    for scores in current_batch_scores:
-        self_target = (scores > 0).float()
+    for logits in current_batch_logits:
+        self_target = (logits > 0).float()
         self_target_list.append(self_target.detach().cpu())
-        total_loss += loss_fct(scores, self_target)
+        total_loss += loss_fct(logits, self_target)
         
     total_loss.backward()
 

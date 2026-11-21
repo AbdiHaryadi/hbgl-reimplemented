@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import logging
 import os
-from pathlib import Path
 
 import torch
 from transformers import BertConfig, BertTokenizer
@@ -33,15 +32,15 @@ class HBGLPipelineArguments:
 @dataclass
 class HBGLPipelineOutput:
     tokens: list[str]
-    batch_scores_per_level: list[torch.Tensor]
+    batch_logits_per_level: list[torch.Tensor]
     named_traces: list[list[str]]
     agrads: list[torch.Tensor]
 
     @property
-    def scores(self):
+    def logits(self):
         return [
-            scores.float().detach().cpu()
-            for scores in self.batch_scores_per_level
+            logits.float().detach().cpu()
+            for logits in self.batch_logits_per_level
         ]
 
     @property
@@ -55,6 +54,13 @@ class HBGLPipelineOutput:
                 if label not in result and label != "[SEP]":
                     result.append(label)
         return result
+
+    @property
+    def scores(self):
+        return [
+            torch.sigmoid(logits).float().detach().cpu()
+            for logits in self.batch_logits_per_level
+        ]
 
 class HBGLPipeline:
     def __init__(self, args: HBGLPipelineArguments, model_path: str):
@@ -79,19 +85,19 @@ class HBGLPipeline:
             torch.cuda.empty_cache()
 
         tokens = self.tokenize(text)
-        batch_scores_per_level = self.get_batch_scores_per_level(tokens)
+        batch_logits_per_level = self.get_batch_logits_per_level(tokens)
 
         return HBGLPipelineOutput(
             tokens=tokens,
-            batch_scores_per_level=batch_scores_per_level,
-            named_traces=self.get_named_traces(batch_scores_per_level),
-            agrads=self.get_agrads(batch_scores_per_level),
+            batch_logits_per_level=batch_logits_per_level,
+            named_traces=self.get_named_traces(batch_logits_per_level),
+            agrads=self.get_agrads(batch_logits_per_level),
         )
 
-    def get_named_traces(self, current_batch_scores: list[torch.Tensor]):
+    def get_named_traces(self, current_batch_logits: list[torch.Tensor]):
         current_batch_predictions: list[torch.Tensor] = [
-            (scores > 0).float().detach().cpu()
-            for scores in current_batch_scores
+            (logits > 0).float().detach().cpu()
+            for logits in current_batch_logits
         ]
         
         single_prediction_result = [predictions_per_level[0] for predictions_per_level in current_batch_predictions]
@@ -103,27 +109,16 @@ class HBGLPipeline:
         tokens = [str(x) for x in tokens]
         return tokens
 
-    def get_batch_scores_per_level(self, tokens: list[str]):
+    def get_batch_logits_per_level(self, tokens: list[str]):
         buf = [tokens]
         # I don't care with Jiang result. I believe with the score.
         buf_to_traces(self.bi_uni_pipeline, self.model, buf)
 
-        current_batch_scores = to_base_model(self.model).get_last_score_list()
-        assert current_batch_scores is not None
-        return current_batch_scores
+        current_batch_logits = to_base_model(self.model).get_last_logit_list()
+        assert current_batch_logits is not None
+        return current_batch_logits
 
-    def get_predicted_labels(self, named_traces: list[list[str]]):
-        result: list[str] = []
-        for trace in named_traces:
-            if (len(trace) == 0) or (len(trace) == 1 and trace[0] == "[SEP]"):
-                break
-
-            for label in trace:
-                if label not in result and label != "[SEP]":
-                    result.append(label)
-        return result
-
-    def get_agrads(self, batch_scores_per_level: list[torch.Tensor]):
+    def get_agrads(self, batch_logits_per_level: list[torch.Tensor]):
         current_batch_attention_probs_list = to_base_model(self.model).get_last_attention_probs_list()
         assert current_batch_attention_probs_list is not None
             
@@ -132,9 +127,9 @@ class HBGLPipeline:
         
         loss_fct = torch.nn.BCEWithLogitsLoss()
         total_loss = torch.tensor(0.0, device=get_device())
-        for scores in batch_scores_per_level:
-            self_target = (scores > 0).float()
-            total_loss += loss_fct(scores, self_target)
+        for logits in batch_logits_per_level:
+            self_target = (logits > 0).float()
+            total_loss += loss_fct(logits, self_target)
 
         total_loss.backward()
 

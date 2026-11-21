@@ -425,7 +425,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         self.hier_labels = None
 
         self.last_attention_probs_list: list[torch.Tensor] | None = None
-        self.last_score_list: list[torch.Tensor] | None = None
+        self.last_logit_list: list[torch.Tensor] | None = None
 
         self.post_init()
 
@@ -464,7 +464,7 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
 
         self._output_ids: list[list[torch.Tensor]] = []
         attention_probs_list = []
-        score_list: list[torch.Tensor] = []
+        logit_list: list[torch.Tensor] = []
 
         # Case when curr_ids is NOT NONE (curr_ids = input_ids)
         # AND next_pos == input_length
@@ -486,9 +486,9 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
         )
         attention_probs_list.append(self.bert.get_last_attention_probs_in_last_layer())
         assert isinstance(new_embedding, torch.Tensor)
-        pred_embeds, pred_ids, prediction_scores = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
+        pred_embeds, pred_ids, prediction_logits = self.get_new_pred_states(new_encoded_layers)
         self._output_ids.append(pred_ids)
-        score_list.append(prediction_scores)
+        logit_list.append(prediction_logits)
 
         prev_embedding = self.concat_embedding_or_layer(None, new_embedding)
         prev_encoded_layers = self.concat_layers(None, new_encoded_layers)
@@ -515,16 +515,16 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             )
             assert isinstance(new_embedding, torch.Tensor)
             attention_probs_list.append(self.bert.get_last_attention_probs_in_last_layer())
-            pred_embeds, pred_ids, prediction_scores = self.get_new_pred_embeds_and_pred_ids(new_encoded_layers)
+            pred_embeds, pred_ids, prediction_logits = self.get_new_pred_states(new_encoded_layers)
             self._output_ids.append(pred_ids)
-            score_list.append(prediction_scores)
+            logit_list.append(prediction_logits)
 
             prev_embedding = self.concat_embedding_or_layer(prev_embedding, new_embedding)
             prev_encoded_layers = self.concat_layers(prev_encoded_layers, new_encoded_layers)
             next_pos += 1
 
         self.last_attention_probs_list = attention_probs_list
-        self.last_score_list = score_list
+        self.last_logit_list = logit_list
         return self._output_ids
 
     def concat_embedding_or_layer(self, prev_embedding: torch.Tensor | None, new_embedding: torch.Tensor):
@@ -544,19 +544,19 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
             )
         ]
 
-    def get_new_pred_embeds_and_pred_ids(self, new_encoded_layers):
+    def get_new_pred_states(self, new_encoded_layers):
         last_hidden: torch.Tensor = new_encoded_layers[-1][:, -1:, :]
-        prediction_scores = self.get_prediction_scores(last_hidden)
-        predictions = torch.sigmoid(prediction_scores) > 0.5
+        prediction_logits = self.get_prediction_logits(last_hidden)
+        predictions = torch.sigmoid(prediction_logits) > 0.5
         pred_ids = self.get_pred_ids(predictions)
         pred_embeds = self.get_pred_embeds(predictions)
-        return pred_embeds, pred_ids, prediction_scores
+        return pred_embeds, pred_ids, prediction_logits
 
-    def get_prediction_scores(self, last_hidden: torch.Tensor):
-        prediction_scores: torch.Tensor = self.cls(last_hidden)
-        prediction_scores = torch.cat([prediction_scores[:, :, self.eos_id].unsqueeze(-1),
-                                        prediction_scores[:, :, self.label_start_index:]], dim=-1)
-        return prediction_scores
+    def get_prediction_logits(self, last_hidden: torch.Tensor):
+        prediction_logits: torch.Tensor = self.cls(last_hidden)
+        prediction_logits = torch.cat([prediction_logits[:, :, self.eos_id].unsqueeze(-1),
+                                        prediction_logits[:, :, self.label_start_index:]], dim=-1)
+        return prediction_logits
 
     def get_pred_ids(self, predictions: torch.Tensor):
         # Predictions are binary.
@@ -622,5 +622,5 @@ class BertForSeq2SeqDecoder(BertPreTrainedModel):
     def get_last_attention_probs_list(self):
         return self.last_attention_probs_list
 
-    def get_last_score_list(self):
-        return self.last_score_list
+    def get_last_logit_list(self):
+        return self.last_logit_list
