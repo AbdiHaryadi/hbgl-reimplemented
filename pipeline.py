@@ -202,7 +202,7 @@ class HBGLPipeline:
             raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], target)
             total_loss += (raw_loss * mask).sum()
 
-        return total_loss
+        return float(total_loss.detach().cpu().item())
 
 def prepare_for_get_outputs(args: HBGLPipelineArguments, model_recover_path: str):
     if args.max_tgt_length >= args.max_seq_length - 2:
