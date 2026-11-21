@@ -2,9 +2,18 @@ import gradio as gr
 import numpy as np
 import pandas as pd
 
-from pipeline import HBGLPipeline
+from pipeline import HBGLPipeline, HBGLPipelineArguments
 
-pipeline = HBGLPipeline()
+# This is only work on local for now.
+pipeline = HBGLPipeline(
+    args=HBGLPipelineArguments(
+        tokenizer_name="bert-base-uncased",
+        max_seq_length=500,
+        max_tgt_length=5, # Depth maximum + 1
+        add_vocab_file="data/bgc/label_map.pkl",
+    ),
+    model_path="models/bgc/ckpt-96000"
+)
 
 def list_to_set_text(x: list[str]):
     if len(x) > 0:
@@ -13,7 +22,11 @@ def list_to_set_text(x: list[str]):
         return "∅"
 
 def predict(text: str):
-    result, named_traces, tokens, agrads_result = pipeline(text)
+    pipeline_result = pipeline(text)
+    result = pipeline_result.predictions
+    named_traces = pipeline_result.named_traces
+    tokens = pipeline_result.tokens
+    agrads_result = pipeline_result.agrads
     return format_for_summary(result, named_traces), named_traces, tokens, agrads_result
 
 def format_for_summary(result: list[str], named_traces: list[list[str]]):

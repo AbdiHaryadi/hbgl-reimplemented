@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HBGLPipelineArguments:
     # Required parameters
-    model_path: str
     tokenizer_name: str
     add_vocab_file: str
 
@@ -29,34 +28,38 @@ class HBGLPipelineArguments:
     config_path: str | None = None
     max_seq_length: int = 512
 
-    ## Decoding parameters
-    subset: int = 0
-    output_file: str | None = None
-    split: str = ''
-
     max_tgt_length: int = 128
-    cache_dir: str | None = None
 
-    zangari_taxonomy_file: str | None = None
+@dataclass
+class HBGLPipelineOutput:
+    tokens: list[str]
+    batch_scores_per_level: list[torch.Tensor]
+    named_traces: list[list[str]]
+    agrads: list[torch.Tensor]
+
+    @property
+    def scores(self):
+        return [
+            scores.float().detach().cpu()
+            for scores in self.batch_scores_per_level
+        ]
+
+    @property
+    def predictions(self):
+        result: list[str] = []
+        for trace in self.named_traces:
+            if (len(trace) == 0) or (len(trace) == 1 and trace[0] == "[SEP]"):
+                break
+
+            for label in trace:
+                if label not in result and label != "[SEP]":
+                    result.append(label)
+        return result
 
 class HBGLPipeline:
-    def __init__(self):
-        data_root = Path("data") / "bgc"
-        label_map_path = data_root / "label_map.pkl"
-        zangari_taxonomy_path = data_root / "bgc_tax.txt"
-        save_path = "models/bgc/ckpt-96000"
-        args = HBGLPipelineArguments(
-            tokenizer_name="bert-base-uncased",
-            split="test",
-            model_path=save_path,
-            max_seq_length=500,
-            max_tgt_length=5, # Depth maximum + 1
-            add_vocab_file=str(label_map_path),
-            zangari_taxonomy_file=str(zangari_taxonomy_path),
-        )
+    def __init__(self, args: HBGLPipelineArguments, model_path: str):
         max_src_length = args.max_seq_length - 2 - args.max_tgt_length
-
-        tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, save_path)
+        tokenizer, bi_uni_pipeline, model = prepare_for_get_outputs(args, model_path)
         model.eval()
 
         self.tokenizer = tokenizer
@@ -76,13 +79,14 @@ class HBGLPipeline:
             torch.cuda.empty_cache()
 
         tokens = self.tokenize(text)
-        current_batch_scores = self.get_batch_scores_per_level(tokens)
+        batch_scores_per_level = self.get_batch_scores_per_level(tokens)
 
-        named_traces = self.get_named_traces(current_batch_scores)
-
-        result = self.get_predicted_labels(named_traces)
-        agrad_result = self.get_agrads(current_batch_scores)
-        return result, named_traces, tokens, agrad_result
+        return HBGLPipelineOutput(
+            tokens=tokens,
+            batch_scores_per_level=batch_scores_per_level,
+            named_traces=self.get_named_traces(batch_scores_per_level),
+            agrads=self.get_agrads(batch_scores_per_level),
+        )
 
     def get_named_traces(self, current_batch_scores: list[torch.Tensor]):
         current_batch_predictions: list[torch.Tensor] = [
@@ -150,8 +154,7 @@ def prepare_for_get_outputs(args: HBGLPipelineArguments, model_recover_path: str
     device = get_device()
     
     tokenizer: BertTokenizer = BertTokenizer.from_pretrained(
-        args.tokenizer_name, do_lower_case=True,
-        cache_dir=args.cache_dir if args.cache_dir else None)
+        args.tokenizer_name, do_lower_case=True)
     assert isinstance(tokenizer.mask_token_id, int)
     assert isinstance(tokenizer.sep_token_id, int)
     assert isinstance(tokenizer.cls_token, str)
