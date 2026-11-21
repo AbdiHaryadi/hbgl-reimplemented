@@ -137,7 +137,7 @@ class HBGLPipeline:
         current_batch_agrads: list[torch.Tensor] = []
         for attention_probs in current_batch_attention_probs_list:
             assert attention_probs.grad is not None
-            ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).sum(dim=1)
+            ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).mean(dim=1)
             current_batch_agrads.append(ca.detach().cpu())
 
         agrad_result = [agrads_per_level[0] for agrads_per_level in current_batch_agrads]
