@@ -35,6 +35,7 @@ class HBGLPipelineOutput:
     batch_logits_per_level: list[torch.Tensor]
     named_traces: list[list[str]]
     agrads: list[torch.Tensor]
+    traces: list[list[int]]
 
     @property
     def logits(self):
@@ -61,6 +62,18 @@ class HBGLPipelineOutput:
             torch.sigmoid(logits).float().detach().cpu()
             for logits in self.batch_logits_per_level
         ]
+
+    @property
+    def prediction_ids(self):
+        result: list[int] = []
+        for trace in self.traces:
+            if (len(trace) == 0) or (len(trace) == 1 and trace[0] == -1):
+                break
+
+            for label_id in trace:
+                if label_id not in result and label_id != -1:
+                    result.append(label_id)
+        return result
 
 class HBGLPipeline:
     def __init__(self, args: HBGLPipelineArguments, model_path: str):
@@ -92,7 +105,18 @@ class HBGLPipeline:
             batch_logits_per_level=batch_logits_per_level,
             named_traces=self.get_named_traces(batch_logits_per_level),
             agrads=self.get_agrads(batch_logits_per_level),
+            traces=self.get_traces(batch_logits_per_level)
         )
+
+    def get_traces(self, current_batch_logits: list[torch.Tensor]):
+        current_batch_predictions: list[torch.Tensor] = [
+            (logits > 0).float().detach().cpu()
+            for logits in current_batch_logits
+        ]
+        
+        single_prediction_result = [predictions_per_level[0] for predictions_per_level in current_batch_predictions]
+        traces = [[i - 1 for i in range(len(x[0])) if x[0, i] == 1] for x in single_prediction_result]
+        return traces
 
     def get_named_traces(self, current_batch_logits: list[torch.Tensor]):
         current_batch_predictions: list[torch.Tensor] = [
