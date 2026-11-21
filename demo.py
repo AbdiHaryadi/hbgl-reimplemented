@@ -11,6 +11,7 @@ pipeline = HBGLPipeline(
         max_seq_length=500,
         max_tgt_length=5, # Depth maximum + 1
         add_vocab_file="data/bgc/label_map.pkl",
+        hierarchy_path="data/bgc/bgc.taxonomy",
     ),
     model_path="models/bgc/ckpt-96000"
 )

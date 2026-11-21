@@ -6,7 +6,7 @@ import torch
 from transformers import BertConfig, BertTokenizer
 
 from evaluation import buf_to_traces, get_device, to_base_model
-from hierarchy import LabelMapper
+from hierarchy import LabelHierarchy, LabelMapper
 from modeling_decoding import BertForSeq2SeqDecoder
 import seq2seq_loader
 from utils import tokenizer_vocab_words
@@ -22,6 +22,7 @@ class HBGLPipelineArguments:
     # Required parameters
     tokenizer_name: str
     add_vocab_file: str
+    hierarchy_path: str
 
     # Other parameters
     config_path: str | None = None
@@ -36,6 +37,7 @@ class HBGLPipelineOutput:
     named_traces: list[list[str]]
     agrads: list[torch.Tensor]
     traces: list[list[int]]
+    agrads_loss: float
 
     @property
     def logits(self):
@@ -91,6 +93,7 @@ class HBGLPipeline:
                          for label in label_mapper.get_all_labels()}
 
         self.max_tgt_length = args.max_tgt_length
+        self.hierarchy = LabelHierarchy.load(args.hierarchy_path)
 
     def __call__(self, text: str):
         # Magic code probably to clear cache
@@ -99,13 +102,15 @@ class HBGLPipeline:
 
         tokens = self.tokenize(text)
         batch_logits_per_level = self.get_batch_logits_per_level(tokens)
+        agrads, agrads_loss = self.get_agrads(batch_logits_per_level)
 
         return HBGLPipelineOutput(
             tokens=tokens,
             batch_logits_per_level=batch_logits_per_level,
             named_traces=self.get_named_traces(batch_logits_per_level),
-            agrads=self.get_agrads(batch_logits_per_level),
-            traces=self.get_traces(batch_logits_per_level)
+            agrads=agrads,
+            traces=self.get_traces(batch_logits_per_level),
+            agrads_loss=agrads_loss,
         )
 
     def get_traces(self, current_batch_logits: list[torch.Tensor]):
@@ -149,11 +154,21 @@ class HBGLPipeline:
         for attention_probs in current_batch_attention_probs_list:
             attention_probs.retain_grad()
         
-        loss_fct = torch.nn.BCEWithLogitsLoss()
+        loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
         total_loss = torch.tensor(0.0, device=get_device())
-        for logits in batch_logits_per_level:
+        for level_index, logits in enumerate(batch_logits_per_level):
             self_target = (logits > 0).float()
-            total_loss += loss_fct(logits, self_target)
+            
+            mask = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            for label_id, label in self.id2label.items():
+                if self.hierarchy.get_label_depth(label) == level_index + 1:
+                    mask[:, :, label_id] = 1
+            mask = mask.to(get_device())
+            
+            # I think we don't care about sep token in the first element, so don't use it as a loss.
+            # Ukuran logits sekarang: <batch_size (1), seq_length (1), label_vocab + 1>
+            raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], self_target[:, :, 1:])
+            total_loss += (raw_loss * mask).sum()
 
         total_loss.backward()
 
@@ -164,7 +179,30 @@ class HBGLPipeline:
             current_batch_agrads.append(ca.detach().cpu())
 
         agrad_result = [agrads_per_level[0] for agrads_per_level in current_batch_agrads]
-        return agrad_result
+        return agrad_result, float(total_loss.detach().cpu().item())
+
+    def get_loss(self, output: HBGLPipelineOutput, target_ids: list[list[int]]):
+        loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
+        total_loss = torch.tensor(0.0, device=get_device())
+        for level_index, logits in enumerate(output.batch_logits_per_level):
+            if level_index == len(target_ids) or len(target_ids[level_index]) == 0:
+                break
+
+            target = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            for target_id in target_ids[level_index]:
+                target[:, :, target_id] = 1
+            target = target.to(get_device())
+
+            mask = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            for label_id, label in self.id2label.items():
+                if self.hierarchy.get_label_depth(label) == level_index + 1:
+                    mask[:, :, label_id] = 1
+            mask = mask.to(get_device())
+
+            raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], target)
+            total_loss += (raw_loss * mask).sum()
+
+        return total_loss
 
 def prepare_for_get_outputs(args: HBGLPipelineArguments, model_recover_path: str):
     if args.max_tgt_length >= args.max_seq_length - 2:

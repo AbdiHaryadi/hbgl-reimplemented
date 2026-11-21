@@ -29,6 +29,7 @@ def download_wos_hierarchical_pipeline():
         checkpoint_number=93000,
         max_seq_length=509,
         max_tgt_length=3,  # Depth maximum + 1
+        hierarchy_path="wos.taxnomy",
     )
 
 def download_wos_flat_pipeline():
@@ -38,6 +39,7 @@ def download_wos_flat_pipeline():
         checkpoint_number=96000,
         max_seq_length=509,
         max_tgt_length=3,  # Depth maximum + 1
+        hierarchy_path="wos.taxnomy",
     )
 
 def download_bgc_hierarchical_pipeline():
@@ -47,6 +49,7 @@ def download_bgc_hierarchical_pipeline():
         checkpoint_number=96000,
         max_seq_length=500,
         max_tgt_length=5,  # Depth maximum + 1
+        hierarchy_path="bgc.taxonomy",
     )
 
 def download_bgc_flat_pipeline():
@@ -56,6 +59,7 @@ def download_bgc_flat_pipeline():
         checkpoint_number=67500,
         max_seq_length=500,
         max_tgt_length=5,  # Depth maximum + 1
+        hierarchy_path="bgc.taxonomy",
     )
 
 def download_and_load(
@@ -63,7 +67,8 @@ def download_and_load(
         model_name: str,
         checkpoint_number: int,
         max_seq_length: int,
-        max_tgt_length: int
+        max_tgt_length: int,
+        hierarchy_path: str,
 ):
     local_dir = Path(".")
     huggingface_hub.snapshot_download(
@@ -77,6 +82,7 @@ def download_and_load(
         max_seq_length=max_seq_length,
         max_tgt_length=max_tgt_length, # Depth maximum + 1
         add_vocab_file=str(local_dir / "label_map.pkl"),
+        hierarchy_path=str(local_dir / hierarchy_path),
     )
     model_path = str(local_dir / "models" / model_name / f"ckpt-{checkpoint_number}")
 
