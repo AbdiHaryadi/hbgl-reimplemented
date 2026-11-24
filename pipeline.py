@@ -120,7 +120,7 @@ class HBGLPipeline:
         for batch_index in range(len(texts)):
             result.append(HBGLPipelineOutput(
                 tokens=tokens_list[batch_index],
-                batch_logits_per_level=batch_logits_per_level[batch_index:batch_index+1],
+                batch_logits_per_level=[logits[batch_index:batch_index+1] for logits in batch_logits_per_level],
                 named_traces=named_traces_list[batch_index],
                 agrads=agrads_list[batch_index],
                 traces=traces_list[batch_index],
