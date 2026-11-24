@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from pipeline import HBGLPipelineArguments, HBGLPipelineBatch
+from pipeline import HBGLPipelineArguments, HBGLPipeline
 
 # This is only work on local for now.
-pipeline = HBGLPipelineBatch(
+pipeline = HBGLPipeline(
     args=HBGLPipelineArguments(
         tokenizer_name="bert-base-uncased",
         max_seq_length=500,
