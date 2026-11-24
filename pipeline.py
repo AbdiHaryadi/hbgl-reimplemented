@@ -234,6 +234,33 @@ class HBGLPipeline:
         
         return traces_list
 
+    def get_loss(self, output: HBGLPipelineOutput, target_ids: list[list[int]]):
+        loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
+        total_loss = torch.tensor(0.0, device=get_device())
+        last_iteration = False
+        for level_index, logits in enumerate(output.batch_logits_per_level):
+            target = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            if level_index == len(target_ids) or len(target_ids[level_index]) == 0:
+                last_iteration = True
+            else:
+                for target_id in target_ids[level_index]:
+                    target[:, :, target_id] = 1
+            target = target.to(get_device())
+
+            mask = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            for label_id, label in self.id2label.items():
+                if self.hierarchy.get_label_depth(label) == level_index + 1:
+                    mask[:, :, label_id] = 1
+            mask = mask.to(get_device())
+
+            raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], target)
+            total_loss += (raw_loss * mask).sum()
+
+            if last_iteration:
+                break
+
+        return float(total_loss.detach().cpu().item())
+
 def prepare_for_get_outputs(args: HBGLPipelineArguments, model_recover_path: str):
     if args.max_tgt_length >= args.max_seq_length - 2:
         raise ValueError("Maximum tgt length exceeds max seq length - 2.")
