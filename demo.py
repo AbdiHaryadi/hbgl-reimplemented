@@ -1,6 +1,7 @@
 import gradio as gr
 import numpy as np
 import pandas as pd
+import torch
 
 from pipeline import HBGLPipeline, HBGLPipelineArguments
 
@@ -38,7 +39,8 @@ def format_for_summary(result: list[str], named_traces: list[list[str]]):
     ])
     return result_text + "\n\n" + named_traces_text
 
-def visualize_agrad(tokens: list[str], agrads_result: list[list[float]], level: int, is_global_scale: bool):
+def visualize_agrad(tokens: list[str], agrads_result: list[torch.Tensor], level: int, is_global_scale: bool):
+    # agrads_result: list[list[float]], but list[float] is in Tensor.
     level_index = level - 1
     if is_global_scale:
         abs_std = np.abs(np.asarray([y for x in agrads_result for y in x])).std()
@@ -56,7 +58,7 @@ def visualize_agrad(tokens: list[str], agrads_result: list[list[float]], level: 
             + [(t, float(a)) for t, a in zip(tokens, scores[1:1+len(tokens)], strict=True)]
             + [("[SEP]", float(scores[1+len(tokens)]))]
             + [(f"[u{prev_level_index + 1}]", scores[2+len(tokens)+prev_level_index]) for prev_level_index in range(level_index)]
-            + [("[MASK]", float(scores[2+len(tokens)+level_index]))]
+            + [(f"[MASK]", float(scores[2+len(tokens)+level_index]))]
         )
     except ValueError:
         raise gr.Error("Cannot zip tokens and scores, possibly because of unequal length. .-.")
@@ -69,12 +71,32 @@ def show_prediction_per_level(named_traces: list[list[str]], level: int):
     level_index = level - 1
     return list_to_set_text(named_traces[level_index])
 
-def show_dataframe(tokens: list[str], agrads_result: list[list[float]]):
-    return pd.DataFrame({
-        "token": tokens,
-    } | {
-        f"agrad_{level_index + 1}": agrads[1:1+len(tokens)] for level_index, agrads in enumerate(agrads_result)
-    })
+def show_dataframe(tokens: list[str], agrads_result: list[torch.Tensor]):
+    # agrads_result: list[list[float]], but list[float] is in Tensor.
+    max_level = len(agrads_result)
+    rows = []
+    for token in ["[CLS]"] + tokens + ["[SEP]"]:
+        token_index = len(rows)
+        rows.append({"token": token} | {
+            f"agrad_{level_index + 1}": agrads[token_index].item()
+            for level_index, agrads in enumerate(agrads_result)
+        })
+
+    mask_rows = []
+    label_rows = []
+    for level_index in range(max_level):
+        token_index = len(rows) + len(mask_rows)
+        mask_rows.append({"token": "[MASK]"} | {
+            f"agrad_{level_index + 1}": (agrads[token_index].item() if token_index == len(agrads) - 1 else None)
+            for level_index, agrads in enumerate(agrads_result)
+        })
+        label_rows.append({"token": f"[u{level_index + 1}]"} | {
+            f"agrad_{level_index + 1}": (agrads[token_index].item() if token_index < len(agrads) - 1 else None)
+            for level_index, agrads in enumerate(agrads_result)
+        })
+
+    rows = rows + mask_rows + label_rows
+    return pd.DataFrame(rows)
 
 with gr.Blocks() as demo:
     with gr.Row():
