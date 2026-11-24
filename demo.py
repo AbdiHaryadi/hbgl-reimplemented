@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from pipeline import HBGLPipeline, HBGLPipelineArguments
+from pipeline import HBGLPipelineArguments, HBGLPipelineBatch
 
 # This is only work on local for now.
-pipeline = HBGLPipeline(
+pipeline = HBGLPipelineBatch(
     args=HBGLPipelineArguments(
         tokenizer_name="bert-base-uncased",
         max_seq_length=500,
@@ -24,7 +24,7 @@ def list_to_set_text(x: list[str]):
         return "∅"
 
 def predict(text: str):
-    pipeline_result = pipeline(text)
+    pipeline_result = pipeline([text])[0]
     result = pipeline_result.predictions
     named_traces = pipeline_result.named_traces
     tokens = pipeline_result.tokens
