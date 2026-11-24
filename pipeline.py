@@ -96,6 +96,8 @@ class HBGLPipeline:
         self.hierarchy = LabelHierarchy.load(args.hierarchy_path)
 
     def __call__(self, text: str, compute_agrad: bool = True):
+        # Mungkin tidak kita buat batch, soalnya sayang banget utilitas GPU-nya.
+        # Like ... kita bisa gunakan batch 16.
         # Magic code probably to clear cache
         with torch.no_grad():
             torch.cuda.empty_cache()
@@ -163,6 +165,7 @@ class HBGLPipeline:
         
         loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
         total_loss = torch.tensor(0.0, device=get_device())
+        last_iteration = False
         for level_index, logits in enumerate(batch_logits_per_level):
             self_target = (logits > 0).float()
             
@@ -171,18 +174,27 @@ class HBGLPipeline:
                 if self.hierarchy.get_label_depth(label) == level_index + 1:
                     mask[:, :, label_id] = 1
             mask = mask.to(get_device())
+
+            if (self_target[:, :, 1:] * mask).sum() == 0:
+                last_iteration = True
             
             # I think we don't care about sep token in the first element, so don't use it as a loss.
             # Ukuran logits sekarang: <batch_size (1), seq_length (1), label_vocab + 1>
             raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], self_target[:, :, 1:])
             total_loss += (raw_loss * mask).sum()
 
+            if last_iteration:
+                break
+
         total_loss.backward()
 
         current_batch_agrads: list[torch.Tensor] = []
         for attention_probs in current_batch_attention_probs_list:
-            assert attention_probs.grad is not None
-            ca = -(attention_probs[:,:,-1] * attention_probs.grad[:,:,-1]).mean(dim=1)
+            if attention_probs.grad is None:
+                attention_probs_grad = torch.zeros_like(attention_probs[:,:,-1])
+            else:
+                attention_probs_grad = attention_probs.grad[:,:,-1]
+            ca = -(attention_probs[:,:,-1] * attention_probs_grad).mean(dim=1)
             current_batch_agrads.append(ca.detach().cpu())
 
         agrad_result = [agrads_per_level[0] for agrads_per_level in current_batch_agrads]
@@ -191,13 +203,14 @@ class HBGLPipeline:
     def get_loss(self, output: HBGLPipelineOutput, target_ids: list[list[int]]):
         loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
         total_loss = torch.tensor(0.0, device=get_device())
+        last_iteration = False
         for level_index, logits in enumerate(output.batch_logits_per_level):
-            if level_index == len(target_ids) or len(target_ids[level_index]) == 0:
-                break
-
             target = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
-            for target_id in target_ids[level_index]:
-                target[:, :, target_id] = 1
+            if level_index == len(target_ids) or len(target_ids[level_index]) == 0:
+                last_iteration = True
+            else:
+                for target_id in target_ids[level_index]:
+                    target[:, :, target_id] = 1
             target = target.to(get_device())
 
             mask = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
@@ -208,6 +221,9 @@ class HBGLPipeline:
 
             raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], target)
             total_loss += (raw_loss * mask).sum()
+
+            if last_iteration:
+                break
 
         return float(total_loss.detach().cpu().item())
 
