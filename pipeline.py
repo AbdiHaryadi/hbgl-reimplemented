@@ -77,6 +77,63 @@ class HBGLPipelineOutput:
                     result.append(label_id)
         return result
 
+@dataclass
+class HBGLPipelineBatchOutput:
+    tokens_list: list[list[str]]
+    batch_logits_per_level: list[torch.Tensor]
+    named_traces_list: list[list[list[str]]]
+    agrads_list: list[list[torch.Tensor]]
+    traces_list: list[list[list[int]]]
+    agrads_loss_list: list[float]
+
+    @property
+    def batch_size(self):
+        return len(self.tokens_list)
+
+    @property
+    def logits(self):
+        return [
+            logits.float().detach().cpu()
+            for logits in self.batch_logits_per_level
+        ]
+
+    @property
+    def predictions(self):
+        batch_result: list[list[str]] = []
+        for named_traces in self.named_traces_list:
+            result: list[str] = []
+            for trace in named_traces:
+                if (len(trace) == 0) or (len(trace) == 1 and trace[0] == "[SEP]"):
+                    break
+
+                for label in trace:
+                    if label not in result and label != "[SEP]":
+                        result.append(label)
+            batch_result.append(result)
+        return batch_result
+
+    @property
+    def scores(self):
+        return [
+            torch.sigmoid(logits).float().detach().cpu()
+            for logits in self.batch_logits_per_level
+        ]
+
+    @property
+    def prediction_ids(self):
+        batch_result: list[list[int]] = []
+        for traces in self.traces_list:
+            result: list[int] = []
+            for trace in traces:
+                if (len(trace) == 0) or (len(trace) == 1 and trace[0] == -1):
+                    break
+
+                for label_id in trace:
+                    if label_id not in result and label_id != -1:
+                        result.append(label_id)
+            batch_result.append(result)
+        return batch_result
+
 class HBGLPipeline:
     def __init__(self, args: HBGLPipelineArguments, model_path: str):
         max_src_length = args.max_seq_length - 2 - args.max_tgt_length
@@ -128,6 +185,36 @@ class HBGLPipeline:
             ))
 
         return result
+
+    def new_forward(self, texts: str | list[str], compute_agrad: bool = True):
+        with torch.no_grad():
+            torch.cuda.empty_cache()
+
+        if isinstance(texts, str):
+            texts = [texts]
+        
+        tokens_list = [self.tokenize(text) for text in texts]
+
+        if compute_agrad:
+            batch_logits_per_level = self.get_batch_logits_per_level(tokens_list)
+            agrads_list, agrads_loss_list = self.get_agrads_list(batch_logits_per_level)
+        else:
+            with torch.no_grad():
+                batch_logits_per_level = self.get_batch_logits_per_level(tokens_list)
+            agrads_list = [[] for _ in texts]
+            agrads_loss_list = [-1.0 for _ in texts]
+
+        named_traces_list = self.get_named_traces_list(batch_logits_per_level)
+        traces_list = self.get_traces_list(batch_logits_per_level)
+
+        return HBGLPipelineBatchOutput(
+            tokens_list=tokens_list,
+            batch_logits_per_level=batch_logits_per_level,
+            named_traces_list=named_traces_list,
+            agrads_list=agrads_list,
+            traces_list=traces_list,
+            agrads_loss_list=agrads_loss_list,
+        )
 
     def tokenize(self, text: str):
         tokens = self.tokenizer.tokenize(text.strip().lower())[:self.max_src_length]
@@ -260,6 +347,43 @@ class HBGLPipeline:
                 break
 
         return float(total_loss.detach().cpu().item())
+
+    def get_loss_batch(self, output: HBGLPipelineBatchOutput, target_ids_list: list[list[list[int]]]):
+        loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
+        total_loss = torch.zeros(output.batch_size, device=get_device())
+        batch_mask = torch.ones(output.batch_size, 1, 1).to(get_device())
+        for level_index, logits in enumerate(output.batch_logits_per_level):
+            target = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            for batch_idx, target_ids in enumerate(target_ids_list):
+                if level_index == len(target_ids) or len(target_ids[level_index]) == 0:
+                    raise NotImplementedError
+                else:
+                    for target_id in target_ids[level_index]:
+                        target[batch_idx, :, target_id] = 1
+            target = target.to(get_device())
+
+            mask = torch.zeros_like(logits[:, :, 1:], dtype=torch.float)
+            for label_id, label in self.id2label.items():
+                if self.hierarchy.get_label_depth(label) == level_index + 1:
+                    mask[:, :, label_id] = 1
+            mask = mask.to(get_device())
+
+            raw_loss: torch.Tensor = loss_fct(logits[:, :, 1:], target)
+            total_loss += (raw_loss * mask * batch_mask).sum((1, 2))
+
+            batch_mask = batch_mask * torch.amax(
+                target * mask,
+                dim=2,
+                keepdim=True,
+            )
+            if batch_mask.sum() == 0:
+                break
+
+        loss_list: list[float] = []
+        for single_total_loss in total_loss:
+            loss_list.append(float(single_total_loss.item()))
+
+        return loss_list
 
 def prepare_for_get_outputs(args: HBGLPipelineArguments, model_recover_path: str):
     if args.max_tgt_length >= args.max_seq_length - 2:
