@@ -160,7 +160,7 @@ def preprocess_procedure(
 if __name__ == "__main__":
     sys_args = sys.argv.copy()
     test_only_path: str | None = None
-    if sys_args[1] == "test":
+    if len(sys_args) > 1 and sys_args[1] == "test":
         print("Testing ...")
         sys_args.pop(1)
         test_only_path = sys_args.pop(1)
