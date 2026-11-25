@@ -453,8 +453,6 @@ class BertForSequenceToSequence(BertPreTrainedForSeq2SeqModel):
         self.bert = HBGLBertModel(config)
         self.cls = BertOnlyMLMHead(config)
 
-        self.log_softmax = nn.LogSoftmax()
-
         self.source_type_id = config.source_type_id
         self.target_type_id = config.target_type_id
 
