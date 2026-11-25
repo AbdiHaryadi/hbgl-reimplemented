@@ -128,6 +128,20 @@ class HBGLPipelineBatchOutput:
         return batch_result
 
     @property
+    def max_valid_level_list(self):
+        batch_result: list[int] = []
+        for named_traces in self.named_traces_list:
+            level = 0
+            for trace in named_traces:
+                level += 1
+                if (len(trace) == 0) or (len(trace) == 1 and trace[0] == "[SEP]"):
+                    break
+            else:
+                level += 1  # Out of bound, but that's okay.
+            batch_result.append(level)
+        return batch_result
+
+    @property
     def scores(self):
         return [
             torch.sigmoid(logits).float().detach().cpu()
