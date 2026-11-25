@@ -77,6 +77,21 @@ class HBGLPipelineOutput:
                     result.append(label_id)
         return result
 
+    def get_agrad_tokens(self):
+        result: list[list[tuple[str, float]]] = []
+        for level_index, agrads_per_level in enumerate(self.agrads):
+            extended_tokens = (
+                ["[CLS]"] + self.tokens + ["[SEP]"]
+                + [f"u{prev_level_index}" for prev_level_index in range(level_index)]
+                + ["[MASK]"]
+            )
+            result_per_level = [
+                (token, float(agrad.item()))
+                for token, agrad in zip(extended_tokens, agrads_per_level)
+            ]
+            result.append(result_per_level)
+        return result
+
 @dataclass
 class HBGLPipelineBatchOutput:
     tokens_list: list[list[str]]
@@ -143,6 +158,24 @@ class HBGLPipelineBatchOutput:
             traces=self.traces_list[index],
             agrads_loss=self.agrads_loss_list[index],
         )
+
+    def get_agrad_tokens_list(self):
+        result: list[list[list[tuple[str, float]]]] = []
+        for agrads, tokens in zip(self.agrads_list, self.tokens_list):
+            result_per_data: list[list[tuple[str, float]]] = []
+            for level_index, agrads_per_level in enumerate(agrads):
+                extended_tokens = (
+                    ["[CLS]"] + tokens + ["[SEP]"]
+                    + [f"u{prev_level_index}" for prev_level_index in range(level_index)]
+                    + ["[MASK]"]
+                )
+                result_per_level = [
+                    (token, float(agrad.item()))
+                    for token, agrad in zip(extended_tokens, agrads_per_level)
+                ]
+                result_per_data.append(result_per_level)
+            result.append(result_per_data)
+        return result
 
 class HBGLPipeline:
     def __init__(self, args: HBGLPipelineArguments, model_path: str):
