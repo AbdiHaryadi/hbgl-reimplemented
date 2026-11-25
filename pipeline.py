@@ -134,6 +134,16 @@ class HBGLPipelineBatchOutput:
             batch_result.append(result)
         return batch_result
 
+    def index_access(self, index: int):
+        return HBGLPipelineOutput(
+            tokens=self.tokens_list[index],
+            batch_logits_per_level=[logits[index:index+1] for logits in self.batch_logits_per_level],
+            named_traces=self.named_traces_list[index],
+            agrads=self.agrads_list[index],
+            traces=self.traces_list[index],
+            agrads_loss=self.agrads_loss_list[index],
+        )
+
 class HBGLPipeline:
     def __init__(self, args: HBGLPipelineArguments, model_path: str):
         max_src_length = args.max_seq_length - 2 - args.max_tgt_length

@@ -24,7 +24,7 @@ def list_to_set_text(x: list[str]):
         return "∅"
 
 def predict(text: str):
-    pipeline_result = pipeline([text])[0]
+    pipeline_result = pipeline.new_forward([text]).index_access(0)
     result = pipeline_result.predictions
     named_traces = pipeline_result.named_traces
     tokens = pipeline_result.tokens
